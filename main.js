@@ -45,7 +45,7 @@ const TUNABLE = {
   'keep.reservas': [0, 10],
   'keep.reservaNivel': [1, 100000],
   maxTwitch: [0, 20],
-  maxKick: [0, 20],
+  maxKick: [0, 2],
   'market.keepStones': [0, 99],
   'market.flipBudget': [0, 1e10],
   'market.flipMargin': [0.01, 1],
@@ -63,6 +63,9 @@ const HISTORY = path.join(DATA, 'history.json');
 const MINI = { width: 640, height: 360 };
 const HOSTS = { game: 'pokeidle.io', twitch: 'twitch.tv', kick: 'kick.com' };
 const KICK_HOUR = 300; // pontos de canal por 1 h de +15% XP
+// A Kick só conta pontos em 2 canais ao mesmo tempo por conta (medido em 06/10/2026: com 6 lives abertas, só 2 subiam).
+const KICK_SLOTS = 2;
+cfg.maxKick = Math.min(KICK_SLOTS, Math.max(0, Number(cfg.maxKick) || 0));
 // Recompensas de pontos de canal da Kick usadas pelo jogo (cada resgate vale 1 h).
 const KICK_REWARDS = {
   xp: { label: '+15% XP', match: 'XP PokeIdle', cost: 300 },
@@ -117,12 +120,15 @@ const settings = {
   unlocked: null,
   gameVersion: null,
   updateSeen: null,
+  // Canais da Kick preferidos, na ordem em que foram marcados.
+  kickPrefs: [],
 };
 {
   const saved = readJson(SETTINGS, {});
   if (typeof saved.panel === 'boolean') settings.panel = saved.panel;
   Object.assign(settings.auto, saved.auto || {});
   if (Array.isArray(saved.closed)) settings.closed = saved.closed;
+  if (Array.isArray(saved.kickPrefs)) settings.kickPrefs = saved.kickPrefs.filter((s) => cfg.kick.includes(s));
   for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen']) if (saved[k] != null) settings[k] = saved[k];
 
 }
@@ -407,12 +413,17 @@ function updateAlerts() {
   const g = gameTab() && gameTab().state;
   const out = [];
   const add = (id, level, text) => out.push({ id, level, text });
+  // Enquanto o jogo carrega a tela ainda não é legível: o problema só vira alerta se durar.
+  const why = g && g.compat && g.compat.problems.length ? g.compat.problems[0] : null;
+  const compatOn = held('compat', !!why, 45000);
+  const loginOn = held('game-login', !!g && !g.logged && !why, 20000);
   if (!g) add('game', 'warn', 'Jogo carregando ou sem resposta.');
-  else if (!g.logged && g.compat && g.compat.problems.length) add('compat', 'bad', 'Automações travadas: ' + g.compat.problems[0] + '.');
-  else if (!g.logged) add('game-login', 'bad', 'Jogo sem login: entre na conta na aba PokéIdle.');
-  else {
+  else if (!g.logged) {
+    if (compatOn) add('compat', 'bad', 'Automações travadas: ' + why + '.');
+    else if (loginOn) add('game-login', 'bad', 'Jogo sem login: entre na conta na aba PokéIdle.');
+  } else {
     // O app não age quando não entende a tela do jogo (outro idioma, painel diferente, jogo atualizado).
-    if (g.compat && g.compat.problems.length) add('compat', 'bad', 'Automações travadas: ' + g.compat.problems[0] + '.');
+    if (compatOn) add('compat', 'bad', 'Automações travadas: ' + why + '.');
     const r = g.rates || {};
     if (!g.hunting && settings.parked) add('parked', 'warn', 'Personagem no Centro a seu pedido: a caça está parada.');
     else if (held('idle', !g.hunting && !running, 2 * 60000)) add('idle', 'bad', 'Personagem parado no Centro há mais de 2 min.');
@@ -472,6 +483,8 @@ function channels() {
         points: st && st.points ? st.points : null,
         pts: st && st.points ? parsePoints(st.points) : 0,
         hours: st && st.points ? Math.floor(parsePoints(st.points) / KICK_HOUR) : 0,
+        // Posição entre os preferidos da Kick (0 = não é preferido).
+        pref: kind === 'kick' ? settings.kickPrefs.indexOf(slug) + 1 : 0,
       });
     }
   }
@@ -489,7 +502,7 @@ function sendStatus() {
   if (!win || win.isDestroyed()) return;
   win.webContents.send(
     'status',
-    Object.assign(snapshot(), { history: history.slice(-150), settings, keep: cfg.keep, hours: cfg.restock.hours, restock: cfg.restock, kickHour: KICK_HOUR,
+    Object.assign(snapshot(), { history: history.slice(-150), settings, keep: cfg.keep, hours: cfg.restock.hours, restock: cfg.restock, kickHour: KICK_HOUR, kickSlots: KICK_SLOTS,
  kickRewards: KICK_REWARDS, market: cfg.market, areasCfg: cfg.areas, config: tunables(), version: app.getVersion() })
 
   );
@@ -762,8 +775,8 @@ async function poll() {
           // Limite por plataforma: cada live aberta custa CPU e rede.
           const sameKind = streamTabs().filter((t) => t.kind === kind).length;
           const cap = kind === 'kick' ? cfg.maxKick : cfg.maxTwitch;
-          if (!tab && settings.auto.lives && !settings.closed.includes(key) && streamTabs().length < cfg.maxStreams && sameKind < cap) {
-
+          // A Kick é arrumada depois do laço: só 2 canais contam pontos, então a escolha é por preferência.
+          if (kind !== 'kick' && !tab && settings.auto.lives && !settings.closed.includes(key) && streamTabs().length < cfg.maxStreams && sameKind < cap) {
             createTab(kind, slug, liveUrl(kind, slug));
             changes.push('abriu ' + key);
           }
@@ -789,23 +802,44 @@ async function poll() {
     lastPoll = result;
     polling = false;
   }
-  // Acima do limite por plataforma (config.json): fecha as excedentes. Na Kick ficam as de mais pontos.
   if (settings.auto.lives) {
-    for (const kind of ['twitch', 'kick']) {
-      const cap = kind === 'kick' ? cfg.maxKick : cfg.maxTwitch;
-      const open = streamTabs().filter((t) => t.kind === kind);
-      const pts = (t) => (t.state && t.state.points ? parsePoints(t.state.points) : 0);
-      for (const t of open.sort((a, b) => pts(b) - pts(a)).slice(cap)) {
-        closeTab(t.id);
-        changes.push(`fechou ${kind}:${t.slug} (limite de ${cap})`);
-      }
+    // Twitch acima do limite (Ajustes): fecha as excedentes.
+    for (const t of streamTabs().filter((t) => t.kind === 'twitch').slice(cfg.maxTwitch)) {
+      closeTab(t.id);
+      changes.push(`fechou twitch:${t.slug} (limite de ${cfg.maxTwitch})`);
     }
+    arrangeKick(result.kick, changes);
   }
   if (changes.length) record({ title: 'Lives: ' + changes.join(', '), ok: true, detail: liveSummary(result) });
 
   writeStatus();
   sendStatus();
   return result;
+}
+// --- Kick: só KICK_SLOTS canais contam pontos ao mesmo tempo ---
+// Ficam abertas as preferidas que estiverem ao vivo, na ordem em que foram marcadas;
+// faltando preferida ao vivo, a vaga vai para outro canal oficial que esteja ao vivo.
+function kickWanted(live) {
+  // Aba ainda aberta conta como ao vivo: cobre leitura sem resposta e a primeira leitura offline (a segunda fecha).
+  const on = (s) => live[s] === true || !!findTab('kick', s);
+  const ok = cfg.kick.filter((s) => on(s) && !settings.closed.includes('kick:' + s));
+  const prefs = settings.kickPrefs.filter((s) => ok.includes(s));
+  // Entre as não preferidas, a que já está aberta continua, para não trocar de canal à toa.
+  const rest = ok.filter((s) => !prefs.includes(s)).sort((a, b) => !!findTab('kick', b) - !!findTab('kick', a));
+  return prefs.concat(rest).slice(0, cfg.maxKick);
+}
+function arrangeKick(live, changes) {
+  const want = kickWanted(live);
+  for (const t of streamTabs().filter((t) => t.kind === 'kick' && !want.includes(t.slug))) {
+    closeTab(t.id);
+    changes.push(`fechou kick:${t.slug} (as vagas da Kick ficaram com ${want.join(' e ') || 'ninguém'})`);
+  }
+  for (const slug of want) {
+    if (findTab('kick', slug)) continue;
+    createTab('kick', slug, liveUrl('kick', slug));
+    changes.push(`abriu kick:${slug}${settings.kickPrefs.includes(slug) ? ' (preferida)' : ''}`);
+  }
+  return want;
 }
 function liveSummary(r) {
   const on = (kind) => Object.keys(r[kind]).filter((s) => r[kind][s] === true);
@@ -1165,6 +1199,12 @@ const ACTIONS = {
       const key = a.kind + ':' + a.slug;
       settings.closed = settings.closed.filter((k) => k !== key);
       saveSettings();
+      if (a.kind === 'kick' && settings.auto.lives && lastPoll) {
+        const changes = [];
+        const want = arrangeKick(lastPoll.kick, changes);
+        if (!want.includes(a.slug)) return { ok: false, detail: [`A Kick só conta pontos em ${KICK_SLOTS} canais por vez e as vagas estão com ${want.join(' e ')}.`, 'Marque este canal como preferido na aba Lives para ele entrar.'] };
+        return { ok: true, detail: ['Aberta.'].concat(changes) };
+      }
       if (!findTab(a.kind, a.slug)) createTab(a.kind, a.slug, liveUrl(a.kind, a.slug));
       return { ok: true, detail: ['Aberta. O gerenciador volta a cuidar dela.'] };
     },
@@ -1178,7 +1218,10 @@ const ACTIONS = {
       saveSettings();
       const tab = findTab(a.kind, a.slug);
       if (tab) closeTab(tab.id);
-      return { ok: true, detail: ['Fechada por você.'] };
+      const detail = ['Fechada por você.'];
+      // A vaga da Kick que ficou livre vai para o próximo canal ao vivo.
+      if (a.kind === 'kick' && settings.auto.lives && lastPoll) arrangeKick(lastPoll.kick, detail);
+      return { ok: true, detail };
     },
   },
 };
@@ -1193,7 +1236,7 @@ const AUTO_INFO = {
   flip: ['Ligar o flip automático', 'A cada 20 minutos o app procura anúncios baratos no Mercado da Comunidade, COMPRA com seus Coins (até o orçamento configurado) e reanuncia mais caro. Se o preço cair depois da compra, há prejuízo.'],
   restock: ['Ligar a recompra automática', 'O app passa a gastar Coins sozinho em poções, revives e Ultra Balls quando o estoque fica abaixo de 2 horas de uso.'],
   depot: ['Ligar a revisão automática do Depot', 'A cada 15 minutos o app guarda os nascimentos raros na Coleção e VENDE o resto ao NPC, sem perguntar.'],
-  lives: ['Ligar o gerenciador de lives', 'O app passa a abrir sozinho os canais oficiais que entram ao vivo e a fechar os que saem.'],
+  lives: ['Ligar o gerenciador de lives', 'O app passa a abrir sozinho os canais oficiais que entram ao vivo e a fechar os que saem. Na Kick ele mantém 2 lives abertas (só 2 contam pontos por vez), começando pelas suas preferidas.'],
   kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar.`],
 };
 
@@ -1345,6 +1388,19 @@ ipcMain.on('toggle-panel', () => {
   settings.panel = !settings.panel;
   saveSettings();
   layout();
+  sendStatus();
+});
+// Preferidos da Kick: marcar põe no fim da fila, desmarcar tira; as abas se rearrumam na hora.
+ipcMain.on('set-kick-pref', (_e, slug, on) => {
+  if (!cfg.kick.includes(slug)) return;
+  const had = settings.kickPrefs.includes(slug);
+  if (!!on === had) return sendStatus();
+  settings.kickPrefs = on ? settings.kickPrefs.concat(slug) : settings.kickPrefs.filter((s) => s !== slug);
+  saveSettings();
+  const detail = [settings.kickPrefs.length ? 'Ordem de preferência: ' + settings.kickPrefs.join(', ') : 'Nenhum preferido: ficam abertas as primeiras lives oficiais que estiverem ao vivo.'];
+  if (settings.auto.lives && lastPoll) arrangeKick(lastPoll.kick, detail);
+  record({ kind: 'ajuste', title: `Kick: ${slug} ${on ? 'marcado como preferido' : 'deixou de ser preferido'}`, ok: true, detail });
+  writeStatus();
   sendStatus();
 });
 ipcMain.on('set-auto', async (_e, key, on) => {

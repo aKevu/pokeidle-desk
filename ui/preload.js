@@ -14,5 +14,6 @@ contextBridge.exposeInMainWorld('pk', {
   resetApprovals: () => ipcRenderer.send('reset-approvals'),
   openUpdate: () => ipcRenderer.send('open-update'),
   setAuto: (key, on) => ipcRenderer.send('set-auto', key, on),
+  setKickPref: (slug, on) => ipcRenderer.send('set-kick-pref', slug, on),
   quit: () => ipcRenderer.send('quit'),
 });

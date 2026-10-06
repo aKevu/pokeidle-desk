@@ -61,6 +61,6 @@
     "trialMinutes": 5
   },
   "maxTwitch": 10,
-  "maxKick": 9,
+  "maxKick": 2,
   "gameFps": 24
 }

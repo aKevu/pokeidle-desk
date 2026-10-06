@@ -42,7 +42,7 @@ O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma
 | **Resumo** | Nível, XP por hora, previsão de nível, estoque em horas, bônus ativos, consumo de CPU e memória |
 | **Caça** | Estimativa de XP por hora de cada área liberada, teste real de uma área, troca de área, melhor equipe, evolução, Oferenda |
 | **Mercado** | Venda das pedras que sobram e radar de flip no Mercado da Comunidade |
-| **Lives** | Canais oficiais ao vivo, pontos da Kick, resgate de bônus, abrir e fechar cada live |
+| **Lives** | Canais oficiais ao vivo, preferidos da Kick, pontos, resgate de bônus, abrir e fechar cada live |
 | **Auto** | Interruptores das automações |
 | **Histórico** | Tudo o que o app e as automações fizeram; clique numa entrada para ver o resumo |
 | **Ajustes** | Tetos de estoque, regra do que fica na Coleção, limites de lives, orçamento do flip |
@@ -55,7 +55,7 @@ O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma
 - **Depot**: guarda na Coleção shiny, potência, qualidade ou nota altas e algumas reservas por espécie; vende o resto ao NPC.
 - **Passe diário**: resgata a recompensa grátis.
 - **Melhor área automática**: quando uma região libera, testa a melhor candidata por alguns minutos e só fica se medir mais XP.
-- **Lives**: abre os canais oficiais que entram ao vivo e fecha os que saem.
+- **Lives**: abre os canais oficiais que entram ao vivo e fecha os que saem. Na Kick mantém só 2 abertas (veja abaixo).
 - **Kick**: troca pontos de canal por horas de +15% de XP.
 - **Pedras**: anuncia no mercado as que sobram.
 - **Flip**: compra anúncios baratos e reanuncia. Usa seus Coins e pode dar prejuízo.
@@ -63,6 +63,12 @@ O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma
 Vêm ligadas: as duas proteções, as lives e o Passe. As demais gastam Coins, vendem pokémon ou trocam pontos, e por isso vêm desligadas.
 
 Cada ação ou automação que muda alguma coisa pede **duas confirmações na primeira vez**; depois de aceita, não pergunta mais. Em *Ajustes* há um botão para voltar a perguntar. Sair do app sempre pergunta.
+
+### Kick: só 2 canais contam por vez
+
+Pelo que foi medido em outubro de 2026, a Kick só soma pontos de canal em **2 lives ao mesmo tempo** por conta: com seis abertas, só duas subiam. Por isso o app mantém 2 lives da Kick abertas e fecha as demais.
+
+Na aba *Lives* você marca os seus canais **preferidos**. Ficam abertas as preferidas que estiverem ao vivo, na ordem em que você marcou. Se uma preferida estiver offline, a vaga vai para a próxima; se não houver preferida ao vivo, entra outro canal oficial que esteja ao vivo, de modo que as 2 vagas fiquem sempre ocupadas enquanto houver live. A Twitch não tem esse limite.
 
 ### Quando o app não reconhece o jogo
 
@@ -78,7 +84,7 @@ O app consulta a página de versões deste repositório ao abrir e a cada 6 hora
 
 - O **X da janela** e o botão **Ocultar hub** somem com a janela; tudo continua rodando. Volte pelo ícone ao lado do relógio ou com **Ctrl+Alt+P**. Passar o mouse no ícone mostra o consumo; o botão direito detalha por aba.
 - Com o hub oculto o jogo para de desenhar e a caça continua.
-- Cada live aberta custa perto de 2,5% de uma CPU de 4 núcleos. Dá para limitar em *Ajustes* → *Lives*, mas menos lives é menos bônus.
+- Cada live aberta custa perto de 2,5% de uma CPU de 4 núcleos. Na Twitch dá para limitar em *Ajustes* → *Lives*, mas menos lives é menos bônus.
 - Fechar o app no meio de uma caça conta como derrota no jogo. Use *Ir ao Centro* antes de sair.
 
 ## Configuração
