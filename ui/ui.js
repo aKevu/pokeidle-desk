@@ -73,10 +73,18 @@ try {
 } catch (e) {}
 if (!PAGES.some((p) => p[0] === page)) page = 'resumo';
 let last = null;
+// Automações que gastam Coins, vendem ou trocam pontos: desligadas numa instalação nova.
+const SPENDING = ['restock', 'depot', 'kick', 'stones', 'flip', 'bestArea'];
+let autoSeen = false;
+try {
+  autoSeen = localStorage.getItem('pk_auto_seen') === '1';
+} catch (e) {}
 function showPage(id) {
   page = id;
+  if (id === 'auto') autoSeen = true;
   try {
     localStorage.setItem('pk_page', id);
+    if (autoSeen) localStorage.setItem('pk_auto_seen', '1');
   } catch (e) {}
   $('body').scrollTop = 0;
   if (last) render(last);
@@ -140,10 +148,16 @@ function renderHero(s) {
   fill($('hero'), [top, where]);
   $('busy').classList.toggle('on', !!s.running);
   $('busy').textContent = s.running ? 'Em andamento: ' + s.running : '';
-  fill(
-    $('alertas'),
-    (s.alerts || []).map((a) => el('div', 'alert ' + a.level, a.text))
-  );
+  const alerts = (s.alerts || []).map((a) => el('div', 'alert ' + a.level, a.text));
+  if (s.update) {
+    const u = el('div', 'alert info', `Versão ${s.update.version} disponível (você usa a ${s.version}). Clique para abrir a página de download.`);
+    u.setAttribute('role', 'button');
+    u.tabIndex = 0;
+    u.onclick = () => window.pk.openUpdate();
+    u.onkeydown = (e) => (e.key === 'Enter' || e.key === ' ') && window.pk.openUpdate();
+    alerts.push(u);
+  }
+  fill($('alertas'), alerts);
   const p = s.perf;
   $('footPerf').textContent = p ? `CPU ${dec(p.cpu)}% · ${p.mem == null ? 'memória medindo…' : p.mem >= 1024 ? dec(p.mem / 1024) + ' GB' : p.mem + ' MB'} · ${(s.channels || []).filter((c) => c.open).length} lives` : 'medindo o consumo…';
   $('footVer').textContent = 'v' + (s.version || '');
@@ -157,8 +171,10 @@ function pageResumo(s) {
   const kk = ch.some((c) => c.kind === 'kick' && c.logged);
   const open = ch.some((c) => c.open);
   const nodes = [];
+  // Automações que gastam ou vendem vêm desligadas; o passo some depois de abrir a aba Auto ou ligar alguma.
+  const autoDone = autoSeen || SPENDING.some((k) => s.settings.auto[k]);
   // Primeiros passos: aparece enquanto falta algum.
-  if (!logged || !g.hunting || (open && (!tw || !kk))) {
+  if (!logged || !g.hunting || (open && (!tw || !kk)) || !autoDone) {
     const step = (done, title, sub, button) => {
       const d = el('div', 'step' + (done ? ' done' : ''));
       const t = el('div');
@@ -171,11 +187,14 @@ function pageResumo(s) {
     steps.append(
       step(logged, 'Entrar no jogo', 'Na aba PokéIdle, com a sua conta.'),
       step(tw && kk, 'Entrar nas lives', open ? `Twitch ${tw ? 'ok' : 'sem login'} · Kick ${kk ? 'ok' : 'sem login'}. Abre o Chrome; entre e feche a janela.` : 'Nenhuma live oficial aberta agora para conferir.', actionBtn(s, 'Login das lives', 'login', true, null, null, 'mini primary')),
-      step(logged && g.hunting, 'Começar a caçar', 'Escolha uma área no mapa do jogo; o app assume a partir daí.', s.settings.lastHunt && logged && !g.hunting ? actionBtn(s, 'Voltar: ' + s.settings.lastHunt.name, 'recover', true, null, s.settings.lastHunt, 'mini primary') : null)
+      step(logged && g.hunting, 'Começar a caçar', 'Escolha uma área no mapa do jogo; o app assume a partir daí.', s.settings.lastHunt && logged && !g.hunting ? actionBtn(s, 'Voltar: ' + s.settings.lastHunt.name, 'recover', true, null, s.settings.lastHunt, 'mini primary') : null),
+      step(autoDone, 'Escolher as automações', 'Recompra, venda do Depot, pedras, Kick e flip vêm desligados. Ligue só o que quiser.', btn('Abrir Auto', 'mini primary', () => showPage('auto')))
     );
     nodes.push(h2('Primeiros passos'), card([steps]));
   }
   if (!logged) return nodes;
+  const notes = (g.compat && g.compat.notes) || [];
+  if (notes.length) nodes.push(h2('Sobre a sua conta'), card(notes.map((n) => el('div', 'note', n))));
   const r = g.rates || {};
   const have = xpTotal(g.lv) + g.xp;
   const targets = TARGETS.filter((t) => t > g.lv).slice(0, 4);
@@ -336,7 +355,7 @@ function pageLives(s) {
 
 const AUTOS = [
   ['Proteções', [
-    ['watchdog', 'Proteção contra parada', () => 'Parado 5 min no Centro sem você pedir: cura, repõe e volta para a última área.'],
+    ['watchdog', 'Proteção contra parada', () => 'Parado 5 min no Centro sem você pedir: cura e volta para a última área. Só repõe o estoque se a Recompra estiver ligada.'],
     ['guard', 'Proteção das automações do jogo', () => 'Religa bola, poção, revive e volta à caça se desligarem; troca o item selecionado se acabar.'],
   ]],
   ['Rotina', [
@@ -355,7 +374,7 @@ const AUTOS = [
   ]],
 ];
 function pageAuto(s) {
-  const nodes = [el('div', 'note', 'Cada automação pede confirmação só na primeira vez que é ligada; desligar é imediato. Tudo o que elas fazem aparece no Histórico.')];
+  const nodes = [el('div', 'note', 'As automações que gastam Coins, vendem pokémon ou trocam pontos vêm desligadas: ligue só as que quiser. Cada uma pede confirmação só na primeira vez que é ligada; desligar é imediato. Tudo o que elas fazem aparece no Histórico.')];
   for (const [group, items] of AUTOS) {
     nodes.push(h2(group));
     nodes.push(

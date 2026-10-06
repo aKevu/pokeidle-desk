@@ -30,7 +30,10 @@ No Windows, depois do `npm install`, também dá para abrir com dois cliques em 
 
 1. **Entre no jogo** na aba PokéIdle, com a sua conta.
 2. **Entre nas lives**: aba *Lives* → *Login das lives*. Abre uma janela do Chrome normal; entre na Twitch e na Kick e feche a janela. O app traz a sessão sozinho. (O Google recusa login dentro de aplicativos como este, por isso o login é feito no Chrome. É preciso ter o Chrome instalado.)
-3. **Escolha uma área de caça** no mapa do jogo. A partir daí o app cuida da rotina.
+3. **Escolha uma área de caça** no mapa do jogo.
+4. **Escolha as automações** na aba *Auto*. Numa instalação nova só vêm ligadas as que não gastam nem vendem nada (proteções, lives e Passe). Recompra, venda do Depot, pedras, Kick, melhor área e flip vêm **desligadas**: ligue as que quiser.
+
+O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma.
 
 ## O que ele faz
 
@@ -46,7 +49,7 @@ No Windows, depois do `npm install`, também dá para abrir com dois cliques em 
 
 ### Automações
 
-- **Proteção contra parada**: personagem 5 minutos parado no Centro sem você pedir → cura a equipe, repõe o estoque e volta para a última área.
+- **Proteção contra parada**: personagem 5 minutos parado no Centro sem você pedir → cura a equipe e volta para a última área (só repõe o estoque se a Recompra estiver ligada).
 - **Proteção das automações do jogo**: religa bola, poção, revive e volta à caça se desligarem.
 - **Recompra**: mantém poções, revives e Ultra Balls pelo consumo medido, até os tetos configurados.
 - **Depot**: guarda na Coleção shiny, potência, qualidade ou nota altas e algumas reservas por espécie; vende o resto ao NPC.
@@ -55,9 +58,21 @@ No Windows, depois do `npm install`, também dá para abrir com dois cliques em 
 - **Lives**: abre os canais oficiais que entram ao vivo e fecha os que saem.
 - **Kick**: troca pontos de canal por horas de +15% de XP.
 - **Pedras**: anuncia no mercado as que sobram.
-- **Flip** (desligado por padrão): compra anúncios baratos e reanuncia. Usa seus Coins e pode dar prejuízo.
+- **Flip**: compra anúncios baratos e reanuncia. Usa seus Coins e pode dar prejuízo.
+
+Vêm ligadas: as duas proteções, as lives e o Passe. As demais gastam Coins, vendem pokémon ou trocam pontos, e por isso vêm desligadas.
 
 Cada ação ou automação que muda alguma coisa pede **duas confirmações na primeira vez**; depois de aceita, não pergunta mais. Em *Ajustes* há um botão para voltar a perguntar. Sair do app sempre pergunta.
+
+### Quando o app não reconhece o jogo
+
+Se o jogo estiver em outro idioma, ou se uma atualização mudar a tela a ponto de o app não conseguir ler a ficha do treinador, o estoque ou os controles de caça, **todas as automações que agem no jogo ficam travadas** e um alerta vermelho no topo do painel diz o motivo. Nada é comprado nem vendido nesse estado.
+
+O app foi feito e testado numa única conta, com VIP e nível alto. Em conta sem VIP ou de nível baixo ele mostra um aviso no *Resumo*; confira os tetos e a reserva de Coins em *Ajustes* antes de ligar a recompra.
+
+### Versão nova
+
+O app consulta a página de versões deste repositório ao abrir e a cada 6 horas. Havendo versão mais nova, aparece um aviso verde no topo do painel; clicar abre a página de download. Ele não baixa nem instala nada sozinho.
 
 ## Consumo
 
@@ -74,14 +89,14 @@ O que muda com frequência está na aba *Ajustes*. O arquivo `config.json` guard
 
 ## Onde ficam seus dados
 
-Nada sai da sua máquina. Sessões de login, ajustes e histórico ficam em:
+O app não envia seus dados a lugar nenhum. Além do jogo e das lives que ele abre, a única consulta que faz é a de versão nova, ao GitHub. Sessões de login, ajustes e histórico ficam em:
 
 - versão baixada: `%APPDATA%\pokeidle-desk`
 - pelo código-fonte: na própria pasta do projeto (`chrome-login/`, `settings.json`, `history.json`, `config.user.json`), todos fora do Git
 
 ## Limitações conhecidas
 
-- Só foi usado no Windows.
+- Só foi usado no Windows, e numa única conta (VIP, nível alto, jogo em português).
 - O app lê a tela do jogo. Uma atualização do PokéIdle que mude a interface pode quebrar uma rotina até o app ser ajustado; quando uma leitura falha, ele não age (por exemplo, não vende nada se não conseguir ler uma carta do Depot).
 - A estimativa de áreas é um cálculo calibrado pelo ritmo atual. Use *Testar* para medir de verdade.
 - Em áreas onde o dano não dá trégua, sair para o Centro usa "Desistir do Combate", que custa 10% do XP do nível.

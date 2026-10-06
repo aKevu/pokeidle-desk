@@ -43,7 +43,9 @@
   };
   const BUSY = { ok: false, why: 'há uma janela aberta no jogo ou outra automação em andamento' };
   const locked = async (fn) => {
+    if (window.__pkBlocked) return { ok: false, why: 'automações travadas: ' + window.__pkBlocked };
     if (P.isBusy() || window.__top()) return BUSY;
+
     P.setBusy(true);
     try {
       return await fn();

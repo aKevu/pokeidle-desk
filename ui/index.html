@@ -46,6 +46,8 @@
   #busy { display: none; }
   #busy.on { display: block; }
   .alert.bad { background: #3d1c1e; color: var(--bad); }
+  .alert.info { background: #1f3a2c; color: var(--ok); cursor: pointer; }
+  .alert.info:hover { filter: brightness(1.15); }
   #nav { display: flex; padding: 8px 8px 0; border-bottom: 1px solid var(--line); }
   #nav button { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 4px; font-size: 12.5px; border-radius: 7px 7px 0 0; background: transparent; color: var(--dim); border: 0; border-bottom: 2px solid transparent; }
   #nav button:hover:not(:disabled) { background: var(--card); color: var(--text); }

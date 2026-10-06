@@ -13,7 +13,7 @@
     P.restock || {}
   );
   const KEEP = Object.assign({ potencia: 3, qualidade: 1.5, nota: 2.5, reservas: 2, reservaNivel: 80 }, P.keep || {});
-  window.__pkAuto = Object.assign({ restock: true, depot: true, guard: true, passe: true, stones: true, flip: false }, P.auto || {});
+  window.__pkAuto = Object.assign({ restock: false, depot: false, guard: true, passe: true, stones: false, flip: false }, P.auto || {});
 
   // As animações de enfeite do jogo (brilho de botões, faixa de evento) redesenham a tela na taxa do monitor
   // e eram quase todo o custo de CPU e de vídeo dele; sem elas o jogo funciona igual.
@@ -197,7 +197,43 @@
   };
   // Pedido manual (force): completa até CFG.hours horas mesmo sem ter chegado ao mínimo.
   const top = (have, buy, perHour, max) => (have < 0 ? 0 : Math.min(Math.max(0, perHour ? Math.ceil(perHour * CFG.hours) - have : have < buy ? buy - have : 0), room(max, have)));
+  // --- Compatibilidade: o app lê a tela do jogo em português e depende de alguns painéis ---
+  // Quando não entende a tela, trava as automações em vez de agir às cegas.
+  window.__pkBlocked = null;
+  const compat = { vip: null, problems: [], notes: [] };
+  const checkCompat = () => {
+    let rd = null;
+    try {
+      rd = window.__rd();
+    } catch (e) {}
+    const t = document.body.innerText;
+    const problems = [];
+    const notes = [];
+    if (!rd) {
+      // Sem ficha de treinador legível: ou é a tela de login (nada a travar), ou o jogo não está em português.
+      const login = document.getElementById('login') || document.getElementById('form-entrar');
+      const atLogin = !!(login && login.offsetParent !== null);
+      if (!atLogin && document.getElementById('palco') && !/EM CAMPO/.test(t)) problems.push('não consegui ler a ficha do treinador (o jogo precisa estar em português)');
+    } else {
+      if (!/EM CAMPO/.test(t) || !/AUTOMAÇÕES/.test(t)) problems.push('o jogo não está em português, e o app lê os textos da tela nesse idioma');
+      else {
+        const st = window.__stock();
+        if (st.pot < 0 || st.rev < 0) problems.push('não consegui ler poções e revives no painel de automações do jogo');
+      }
+      if (!document.getElementById('ir-centro') && !document.getElementById('centro-curar')) problems.push('os controles de caça do jogo não foram encontrados (o jogo pode ter mudado; procure uma versão nova do app)');
+      compat.vip = !!document.querySelector('.tr-ativo.vip') || /VIP\s*\+50% XP/.test(t);
+      if (!compat.vip) notes.push('Conta sem VIP: o app foi feito e testado numa conta VIP. Se alguma automação do próprio jogo (bola, poção, revive, voltar à caça) não existir na sua conta, o app não tem como ligá-la.');
+      if (rd.lv < 30) notes.push('Conta de nível baixo: a recompra compra Ultra Ball e Hyper Potion. Confira os tetos e a reserva de Coins em Ajustes antes de ligar.');
+    }
+    compat.problems = problems;
+    compat.notes = notes;
+    window.__pkBlocked = problems.length ? problems[0] : null;
+    return compat;
+  };
+  setTimeout(checkCompat, 5000);
+
   window.__restockCheck = async (force) => {
+    if (window.__pkBlocked) return 'bloqueado: ' + window.__pkBlocked;
     if (busy || window.__top()) return 'skip';
     let st, rd;
     try {
@@ -292,6 +328,7 @@
   };
   // onlyKeep: só guarda na Coleção o que bate a regra e para antes de vender (usado antes da Oferenda).
   window.__depotReview = async (onlyKeep) => {
+    if (window.__pkBlocked) return 'bloqueado';
     if (busy || window.__top()) return 'skip';
     busy = true;
     try {
@@ -768,11 +805,13 @@
   let ticks = 0;
   every(async () => {
     ticks++;
+    checkCompat();
     try {
       window.__rd();
     } catch (e) {
       return; // fora do jogo (tela de login)
     }
+    if (window.__pkBlocked) return; // tela não reconhecida: nenhuma automação roda
     if (window.__pkAuto.restock && ticks % 2 === 0) await window.__restockCheck();
     if (window.__pkAuto.depot && ticks % 15 === 5) await window.__depotReview();
     if (ticks % 10 === 1) await window.__readKick();
@@ -813,7 +852,7 @@
       rd = window.__rd();
       st = window.__stock();
     } catch (e) {
-      return { logged: false };
+      return { logged: false, compat: { vip: null, problems: compat.problems, notes: [] } };
     }
     const tw = sheet().match(/Bônus Twitch \| \+([\d,]+)% XP/);
     return {
@@ -830,6 +869,8 @@
       modal: !!window.__top(),
       hud: hud(),
       advice: window.__pkAdvice || null,
+      compat: { vip: compat.vip, problems: compat.problems, notes: compat.notes },
+
       area: huntSlug(),
       unlocked: window.__pkMap ? window.__pkMap.marks.filter((m) => !m.locked).length : null,
       version: (document.body.innerText.match(/\bv\d+\.\d+\.\d+\b/g) || []).pop() || null,

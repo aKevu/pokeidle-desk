@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Notification, Tray, Menu, nativeImage, globalShortcut } = require('electron');
+const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Notification, Tray, Menu, nativeImage, globalShortcut, net, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -107,7 +107,8 @@ const readJson = (file, fallback) => {
 // measures: XP/h medido de verdade em cada área testada.
 const settings = {
   panel: true,
-  auto: { restock: true, depot: true, lives: true, kick: true, watchdog: true, guard: true, bestArea: true, passe: true, stones: true, flip: false },
+  // Numa instalação nova só vêm ligadas as automações que não vendem, não compram e não resgatam nada.
+  auto: { watchdog: true, guard: true, lives: true, passe: true, restock: false, depot: false, kick: false, stones: false, flip: false, bestArea: false },
   closed: [],
   lastHunt: null,
   parked: false,
@@ -115,13 +116,14 @@ const settings = {
   approved: {},
   unlocked: null,
   gameVersion: null,
+  updateSeen: null,
 };
 {
   const saved = readJson(SETTINGS, {});
   if (typeof saved.panel === 'boolean') settings.panel = saved.panel;
   Object.assign(settings.auto, saved.auto || {});
   if (Array.isArray(saved.closed)) settings.closed = saved.closed;
-  for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion']) if (saved[k] != null) settings[k] = saved[k];
+  for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen']) if (saved[k] != null) settings[k] = saved[k];
 
 }
 const saveSettings = () => fs.writeFile(SETTINGS, JSON.stringify(settings, null, 2), () => {});
@@ -322,7 +324,7 @@ async function watch(g) {
 
   if (running) return;
 
-  // Personagem parado no Centro sem ter sido você: cura, repõe se preciso e volta para a última área.
+  // Personagem parado no Centro sem ter sido você: cura, repõe (só com a Recompra ligada) e volta para a última área.
   if (settings.auto.watchdog && idleSince && now - idleSince > 5 * 60000 && !settings.parked && settings.lastHunt && !g.modal) {
     idleSince = now;
     // Sem esperar: a leitura do jogo continua enquanto a ação roda.
@@ -368,6 +370,33 @@ async function tryBestArea() {
   await execute('trial', { slug: cand.slug, name: cand.name, lv: cand.lv }, `Melhor área automática: testando ${cand.name} Nv ${cand.lv}`);
 }
 
+// --- Versão nova do próprio app (última release publicada no GitHub) ---
+const REPO = 'aKevu/pokeidle-desk';
+let update = null;
+const newer = (a, b) => {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+async function checkUpdate() {
+  try {
+    const r = await net.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'pokeidle-desk' } });
+    if (!r.ok) return;
+    const j = await r.json();
+    const latest = String(j.tag_name || '').replace(/^v/, '');
+    update = latest && newer(latest, app.getVersion()) ? { version: latest, url: `https://github.com/${REPO}/releases/tag/v${latest}` } : null;
+    // Avisa uma vez por versão; o aviso no painel fica até atualizar.
+    if (update && settings.updateSeen !== update.version) {
+      settings.updateSeen = update.version;
+      saveSettings();
+      record({ kind: 'versao', title: `Versão nova do PokéIdle Desk: ${latest} (você usa a ${app.getVersion()})`, ok: true, detail: [j.name || '', update.url] });
+      notify('PokéIdle Desk', `Versão ${latest} disponível`);
+    }
+  } catch (e) {}
+}
+ipcMain.on('open-update', () => update && shell.openExternal(update.url));
+
 function notify(title, body) {
   try {
     if (Notification.isSupported()) new Notification({ title, body, icon: path.join(ROOT, 'icon.png') }).show();
@@ -379,8 +408,11 @@ function updateAlerts() {
   const out = [];
   const add = (id, level, text) => out.push({ id, level, text });
   if (!g) add('game', 'warn', 'Jogo carregando ou sem resposta.');
+  else if (!g.logged && g.compat && g.compat.problems.length) add('compat', 'bad', 'Automações travadas: ' + g.compat.problems[0] + '.');
   else if (!g.logged) add('game-login', 'bad', 'Jogo sem login: entre na conta na aba PokéIdle.');
   else {
+    // O app não age quando não entende a tela do jogo (outro idioma, painel diferente, jogo atualizado).
+    if (g.compat && g.compat.problems.length) add('compat', 'bad', 'Automações travadas: ' + g.compat.problems[0] + '.');
     const r = g.rates || {};
     if (!g.hunting && settings.parked) add('parked', 'warn', 'Personagem no Centro a seu pedido: a caça está parada.');
     else if (held('idle', !g.hunting && !running, 2 * 60000)) add('idle', 'bad', 'Personagem parado no Centro há mais de 2 min.');
@@ -448,7 +480,7 @@ function channels() {
 
 function snapshot() {
   const g = gameTab();
-  return { updated: new Date().toISOString(), game: g ? g.state : null, channels: channels(), lastPoll, running, alerts, perf };
+  return { updated: new Date().toISOString(), game: g ? g.state : null, channels: channels(), lastPoll, running, alerts, perf, update };
 }
 function writeStatus() {
   fs.writeFile(path.join(DATA, 'status.json'), JSON.stringify(snapshot(), null, 2), () => {});
@@ -954,6 +986,7 @@ async function trial(a) {
 }
 
 const DEPOT_RESULT = {
+  bloqueado: 'Automações travadas: o app não reconheceu a tela do jogo (veja o alerta no topo do painel)',
   vendido: 'Depot revisado: o que não batia a regra foi vendido',
   vazio: 'Depot vazio, nada a fazer',
   'só guardados': 'Depot revisado: tudo o que havia foi para a Coleção',
@@ -979,7 +1012,7 @@ const ACTIONS = {
     detail: () => `Compra poções, revives e Ultra Balls até cobrir ${cfg.restock.hours} horas de uso, gastando Coins e mantendo ${cfg.restock.reserve.toLocaleString('pt-BR')} de reserva.`,
     run: async () => {
       const r = await gameJs('window.__restockCheck(true)');
-      return { ok: !/falhou|Erro|sem leitura|skip/.test(r), detail: [r === 'nada' ? 'Estoque já cobre o período; nada comprado' : r === 'skip' ? DEPOT_RESULT.skip : r] };
+      return { ok: !/falhou|Erro|sem leitura|skip|bloqueado/.test(r), detail: [r === 'nada' ? 'Estoque já cobre o período; nada comprado' : r === 'skip' ? DEPOT_RESULT.skip : r] };
     },
   },
   depot: {
@@ -1014,12 +1047,14 @@ const ACTIONS = {
   },
   recover: {
     title: (a) => `Voltar para ${a.name} (Nv ${a.lv})`,
-    detail: () => 'Cura a equipe no Centro, repõe o estoque se estiver no fim e entra de novo na última área.',
+    detail: () => 'Cura a equipe no Centro e entra de novo na última área. Só repõe o estoque se a Recompra automática estiver ligada.',
     run: async (a) => {
       const g = await collectGame();
       if (g && g.hunting) return { ok: true, detail: ['Já estava caçando de novo.'] };
       const detail = [(await gameJs('window.__heal ? window.__heal() : false')) ? 'Equipe curada no Centro' : 'Botão de curar não encontrado'];
-      if (g && (g.pot < 100 || g.rev < 10 || g.balls < 100)) detail.push('Estoque: ' + (await gameJs('window.__restockCheck(true)')));
+      // Só compra se a recompra automática estiver ligada: a proteção não gasta Coins por conta própria.
+      if (g && settings.auto.restock && (g.pot < 100 || g.rev < 10 || g.balls < 100)) detail.push('Estoque: ' + (await gameJs('window.__restockCheck(true)')));
+      else if (g && (g.pot < 30 || g.rev < 5)) detail.push('Estoque quase no fim e a recompra automática está desligada.');
       const h = await goHunt(a);
       return { ok: h.ok, detail: detail.concat(h.detail) };
     },
@@ -1150,7 +1185,7 @@ const ACTIONS = {
 
 // O que cada automação faz, para as duas confirmações ao ligar.
 const AUTO_INFO = {
-  watchdog: ['Ligar a proteção contra parada', 'Se o personagem ficar 5 minutos parado no Centro sem você ter pedido, o app cura a equipe, repõe o estoque se preciso e volta sozinho para a última área.'],
+  watchdog: ['Ligar a proteção contra parada', 'Se o personagem ficar 5 minutos parado no Centro sem você ter pedido, o app cura a equipe e volta sozinho para a última área. Ele só repõe o estoque se a Recompra automática estiver ligada.'],
   guard: ['Ligar a proteção das automações do jogo', 'A cada minuto o app confere e religa o lançamento automático de bolas, o uso de poções, o revive e a volta à caça, e troca a bola ou poção selecionada se ela acabar.'],
   bestArea: ['Ligar a melhor área automática', 'Quando uma região nova é liberada, o app calcula as áreas, testa a melhor candidata por alguns minutos e fica nela só se o XP por hora medido for maior. Cada teste para a caça por cerca de dois minutos.'],
   passe: ['Ligar o resgate automático do Passe', 'O app resgata a recompensa grátis do Passe assim que ela libera. Não compra nada.'],
@@ -1163,10 +1198,23 @@ const AUTO_INFO = {
 };
 
 // Roda uma ação sem perguntar (automações e encadeamentos) e registra do mesmo jeito que as manuais.
+// Ações que não tocam no jogo continuam valendo quando a tela dele não é reconhecida.
+const OFF_GAME = ['refresh', 'login', 'openLive', 'closeLive', 'kickRedeem'];
+const blockedWhy = () => {
+  const g = gameTab() && gameTab().state;
+  return g && g.compat && g.compat.problems.length ? g.compat.problems[0] : null;
+};
 async function execute(name, args, title, src) {
   const A = ACTIONS[name];
   if (!A || running) return null;
   const label = title || A.title(args);
+  const why = OFF_GAME.includes(name) ? null : blockedWhy();
+  if (why) {
+    // Pedido pelo painel fica registrado; as automações só ficam quietas (o alerta já explica).
+    if (src === 'app') record({ kind: name, src, title: label, ok: false, detail: ['Automações travadas: ' + why + '.', 'Nada foi feito no jogo.'] });
+    sendStatus();
+    return { ok: false, detail: ['Automações travadas: ' + why] };
+  }
   running = label;
   sendStatus();
   const t0 = Date.now();
@@ -1243,6 +1291,9 @@ function createWindow() {
   setInterval(poll, cfg.pollMinutes * 60000);
   setInterval(collect, 20000);
   setInterval(measurePerf, 20000);
+  setTimeout(checkUpdate, 15000);
+  setInterval(checkUpdate, 6 * 3600000);
+
   setTimeout(measureMemory, 30000);
   setInterval(measureMemory, 180000);
 }

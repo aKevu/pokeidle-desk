@@ -12,10 +12,7 @@ contextBridge.exposeInMainWorld('pk', {
   hideHub: () => ipcRenderer.send('hide-hub'),
   setConfig: (key, value) => ipcRenderer.send('set-config', key, value),
   resetApprovals: () => ipcRenderer.send('reset-approvals'),
-
-
-
-
+  openUpdate: () => ipcRenderer.send('open-update'),
   setAuto: (key, on) => ipcRenderer.send('set-auto', key, on),
   quit: () => ipcRenderer.send('quit'),
 });
