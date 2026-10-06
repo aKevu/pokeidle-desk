@@ -1,0 +1,16 @@
+# Dependências e pacotes gerados
+node_modules/
+dist/
+
+# Dados pessoais e de sessão: nunca vão para o repositório
+chrome-login/
+settings.json
+history.json
+status.json
+config.user.json
+
+# Sobras de execução
+*.log
+*.zip
+shot-*.png
+.patch-edits.txt

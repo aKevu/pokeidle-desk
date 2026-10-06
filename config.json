@@ -1,0 +1,66 @@
+{
+  "gameUrl": "https://pokeidle.io/app",
+  "debugPort": 0,
+  "pollMinutes": 5,
+  "maxStreams": 19,
+  "twitch": [
+    "faasii",
+    "patopapao",
+    "axtlol",
+    "matta",
+    "rodil",
+    "clovaobengala",
+    "luccatv",
+    "xdaren_",
+    "biscoitao",
+    "befoin"
+  ],
+  "kick": [
+    "yetz",
+    "axt",
+    "biscoitao",
+    "matta",
+    "patopapao2",
+    "clovaobengalalol",
+    "rodil",
+    "luccatv",
+    "xdaren"
+  ],
+  "restock": {
+    "potMin": 250,
+    "potBuy": 500,
+    "revMin": 30,
+    "revBuy": 60,
+    "ballMin": 400,
+    "ballBuy": 1000,
+    "reserve": 100000,
+    "hours": 4,
+    "potMax": 1200,
+    "revMax": 150,
+    "ballMax": 3000
+  },
+  "keep": {
+    "potencia": 3,
+    "qualidade": 1.5,
+    "nota": 2.5,
+    "reservas": 2,
+    "reservaNivel": 80
+  },
+  "market": {
+    "keepStones": 1,
+    "minLadder": 3,
+    "flipBudget": 1500000,
+    "flipMargin": 0.1,
+    "flipMinProfit": 20000,
+    "flipMaxItems": 20,
+    "fee": 0.15
+  },
+  "areas": {
+    "minGain": 0.15,
+    "maxRisk": 2,
+    "trialMinutes": 5
+  },
+  "maxTwitch": 10,
+  "maxKick": 9,
+  "gameFps": 24
+}

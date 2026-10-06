@@ -1,0 +1,17 @@
+{
+  "name": "pokeidle-desk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hub de mesa para o PokéIdle: jogo, lives oficiais da Twitch e da Kick e automações num só lugar",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "node tools/build.js"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.5.1"
+  },
+  "productName": "PokeIdle Desk",
+  "author": "aKevu"
+}
