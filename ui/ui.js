@@ -107,7 +107,7 @@ function renderNav(s) {
 
 // XP acumulado do treinador até o início do nível L.
 const xpTotal = (lv) => (50 / 3) * (lv ** 3 - 6 * lv ** 2 + 17 * lv - 12);
-// Metas da previsão: as próximas da sequência (o passo cresce com o nível), mais as regiões do Mapa que ainda faltam abrir.
+// Metas da previsão: só as próximas cinco da sequência (o passo cresce com o nível). A lista anda junto com o progresso.
 const REGIONS = [[150, 'Outland'], [500, 'Hoenn'], [1000, 'Sinnoh'], [5000, 'Unova'], [10000, 'Kalos'], [25000, 'Alola']];
 // Passo da sequência: de 50 em 50 até o Nv 1.000, de 100 em 100 até 5.000, de 500 em 500 até 10.000 e de 1.000 em 1.000
 // daí em diante, sem teto (Alola abre no 25.000 e tem áreas que pedem bem mais).
@@ -120,24 +120,8 @@ const levelTargets = (lv) => {
     cur = (Math.floor(cur / st) + 1) * st;
     out.push(cur);
   }
-  for (const [l] of REGIONS) if (l > lv && !out.includes(l)) out.push(l);
-  return out.sort((a, b) => a - b);
-};
-// A sequência inteira até a última região (ou as próximas 15, para quem já passou dela).
-const levelLadder = (lv) => {
-  const out = [];
-  let cur = lv;
-  for (let i = 0; i < 400 && (cur < 25000 || out.length < 15); i++) {
-    const st = stepAt(cur);
-    cur = (Math.floor(cur / st) + 1) * st;
-    out.push(cur);
-  }
   return out;
 };
-let ladderOpen = false;
-try {
-  ladderOpen = localStorage.getItem('pk_ladder') === '1';
-} catch (e) {}
 // XP de um abate pelo nível da área: a fórmula do próprio jogo (shared/sell-value.mjs).
 const xpKill = (n) => (n <= 150 ? Math.floor((6 * n * n) / 10) + 8 : Math.round(13500 * (n / 150) ** 1.25));
 // Níveis das áreas de caça, para quando o jogo ainda não informou a escada dele.
@@ -260,7 +244,7 @@ function pageResumo(s) {
   if (notes.length) nodes.push(h2('Sobre a sua conta'), card(notes.map((n) => el('div', 'note', n))));
   const r = g.rates || {};
   const have = xpTotal(g.lv) + g.xp;
-  const targets = ladderOpen ? levelLadder(g.lv) : levelTargets(g.lv);
+  const targets = levelTargets(g.lv);
   const proj = r.xp > 0 ? project(g, r.xp, targets) : new Map();
   const x = g.extra || {};
   nodes.push(
@@ -272,21 +256,14 @@ function pageResumo(s) {
       row('Vendidos ao NPC nesta sessão', g.stats.sold ? `${g.stats.sold} · ${fmt(g.stats.soldGold)}` : '0'),
       row('Guardados na Coleção nesta sessão', String(g.stats.kept)),
     ]),
-    h2('Previsão de nível', r.xp > 0 ? 'subindo de área com o nível' : ''),
+    h2('Previsão de nível', r.xp > 0 ? 'próximas 5 metas' : ''),
     card(
       targets.length && r.xp > 0
-        ? targets
-            .map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta(proj.get(t) ? proj.get(t).hours : NaN)))
-            .concat(
-              btn(ladderOpen ? 'Mostrar só as próximas' : `Mostrar a sequência inteira (${levelLadder(g.lv).length} metas)`, 'wide mini', () => {
-                ladderOpen = !ladderOpen;
-                try {
-                  localStorage.setItem('pk_ladder', ladderOpen ? '1' : '0');
-                } catch (e) {}
-                if (last) render(last);
-              }, 'De 50 em 50 até o Nv 1.000, de 100 em 100 até 5.000, de 500 em 500 até 10.000 e de 1.000 em 1.000 daí em diante'),
-              el('div', 'note', 'Conta com o XP por abate das áreas que o nível vai liberando (fórmula do jogo), com os abates por hora e os bônus de agora. O XP de cada nível cresce mais rápido que o XP por abate, por isso as metas distantes continuam longe.')
-            )
+        ? targets.map((t) => {
+            const p = proj.get(t);
+            // Meta a mais de um ano não é previsão que valha mostrar.
+            return row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), p && p.hours < 24 * 365 ? eta(p.hours) : 'longe demais para estimar');
+          })
         : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]
     ),
     h2('Estoque', `teto: ${fmt(s.config['restock.potMax'])} poções`),
