@@ -111,7 +111,7 @@ const readJson = (file, fallback) => {
 const settings = {
   panel: true,
   // Numa instalação nova só vêm ligadas as automações que não vendem, não compram e não resgatam nada.
-  auto: { watchdog: true, guard: true, lives: true, passe: true, restock: false, depot: false, kick: false, stones: false, flip: false, bestArea: false },
+  auto: { watchdog: true, guard: true, lives: true, passe: true, restock: false, depot: false, kick: false, stones: false, flip: false, bestArea: false, pvp: false },
   closed: [],
   lastHunt: null,
   parked: false,
@@ -441,12 +441,16 @@ function updateAlerts() {
       add('twitch', 'warn', `Twitch: ${tw.length} lives tocando, mas o bônus no jogo é ${g.twitch || '0%'} (esperado ${String(expected).replace('.', ',')}%).`);
     }
   }
+  // Canal fechado perde a marca de "pontos parados": ao reabrir, a contagem do tempo recomeça.
+  for (const slug of kickSeen.keys()) if (!findTab('kick', slug)) kickSeen.delete(slug);
   for (const kind of ['twitch', 'kick']) {
     const open = channels().filter((c) => c.kind === kind && c.open);
     const name = kind === 'kick' ? 'Kick' : 'Twitch';
-    if (held(kind + '-login', open.length > 0 && open.every((c) => c.logged === false), 60000)) add(kind + '-login', 'bad', `${name} sem login no app: use "Login das lives".`);
+    // O contador de pontos some por instantes quando a página se redesenha: só vale como "sem login" se durar.
+    if (held(kind + '-login', open.length > 0 && open.every((c) => c.logged === false), 5 * 60000)) add(kind + '-login', 'bad', `${name} sem login no app: use "Login das lives".`);
     for (const c of open) {
-      if (held(`stop:${kind}:${c.slug}`, c.playing === false, 90000)) add(`stop:${kind}:${c.slug}`, 'warn', `${name} · ${c.slug}: vídeo parado.`);
+      // Live que acabou de sair do ar fica com o vídeo parado até o gerenciador fechar a aba: isso não é problema.
+      if (held(`stop:${kind}:${c.slug}`, c.playing === false && c.live === true, 4 * 60000)) add(`stop:${kind}:${c.slug}`, 'warn', `${name} · ${c.slug}: vídeo parado.`);
       if (kind !== 'kick' || !c.points) continue;
       const seen = kickSeen.get(c.slug);
       if (!seen || seen.pts !== c.points) kickSeen.set(c.slug, { pts: c.points, at: Date.now() });
@@ -850,7 +854,7 @@ function liveSummary(r) {
 }
 
 // --- Kick: resgate de +15% XP com pontos do canal ---
-const KICK_SHEET = `(()=>{const b=[...document.querySelectorAll('button')].filter(b=>b.offsetParent&&/^\\d+([.,]\\d+)?( mil)?$/.test(b.innerText.trim()))[0];
+const KICK_SHEET = `(()=>{const b=[...document.querySelectorAll('button')].filter(b=>b.offsetParent&&b.querySelector('svg[data-ds-icon="Bubbles"]')&&/^\\d+([.,]\\d+)?( mil)?$/.test(b.innerText.trim()))[0];
   if(!b) return null; const open=/Pontos do canal/.test(document.body.innerText)&&[...document.querySelectorAll('button')].some(x=>x.offsetParent&&/XP PokeIdle/i.test(x.innerText));
   b.scrollIntoView({block:'center'}); const r=b.getBoundingClientRect(); return {open, pts:b.innerText.trim(), x:Math.round(r.left+r.width/2), y:Math.round(r.top+r.height/2)}})()`;
 const kickRedeemJs = (match) => `(async()=>{const sl=ms=>new Promise(r=>setTimeout(r,ms)); const vis=f=>[...document.querySelectorAll('button')].find(b=>b.offsetParent&&!b.disabled&&f(b.innerText.trim()));
@@ -866,6 +870,7 @@ async function kickRedeem(slug, count, reward) {
   const detail = [];
   let done = 0;
   let before = null;
+  let back = null; // aba que estava na frente, se foi preciso trazer a live para o primeiro plano
   for (let i = 0; i < count; i++) {
     const s = await js(tab, KICK_SHEET);
     if (!s) throw new Error('contador de pontos não encontrado (a Kick está logada?)');
@@ -877,6 +882,18 @@ async function kickRedeem(slug, count, reward) {
       await sleep(400);
       await clickAt(wc, s.x, s.y);
       await sleep(1300);
+      // No tamanho pequeno a lista às vezes não abre: repete com a aba em primeiro plano, no tamanho cheio.
+      let s2 = await js(tab, KICK_SHEET);
+      if (s2 && !s2.open) {
+        if (back === null) back = activeId;
+        select(tab.id);
+        await sleep(900);
+        s2 = await js(tab, KICK_SHEET);
+        if (s2 && !s2.open) {
+          await clickAt(wc, s2.x, s2.y);
+          await sleep(1500);
+        }
+      }
     }
     const r = await js(tab, kickRedeemJs(R.match));
     await pressKey(wc, 'Escape');
@@ -889,24 +906,32 @@ async function kickRedeem(slug, count, reward) {
   }
   await sleep(1500);
   forceVisible = null;
+  if (back !== null && tabs.has(back)) select(back);
   layout();
   const after = await js(tab, KICK_SHEET);
   detail.unshift(`Canal ${slug}: ${done} de ${count} resgates de ${R.label} feitos`, `Pontos: ${before} → ${after ? after.pts : '?'}`, 'O jogo credita as horas em até um minuto.');
   return { ok: done === count, done, detail };
 }
 // Automático: sempre que um canal aberto tiver pontos para 1 h, resgata (as horas acumulam no jogo).
+const kickFail = new Map(); // canal → até quando esperar depois de uma falha
+let kickFails = 0;
 async function autoKick() {
-  const ch = channels().find((c) => c.kind === 'kick' && c.open && c.hours >= 1);
+  const ch = channels().find((c) => c.kind === 'kick' && c.open && c.hours >= 1 && c.pts < 100000 && !(kickFail.get(c.slug) > Date.now()));
   if (!ch) return;
   running = 'Resgate automático na Kick';
   try {
     const r = await kickRedeem(ch.slug, 1);
     record({ title: `Kick: resgate automático de 1 h de +15% XP em ${ch.slug}`, ok: r.ok, detail: r.detail });
-    // Recompensa pausada ou outro bloqueio: não insiste a cada ciclo.
-    if (!r.ok) {
-      settings.auto.kick = false;
-      saveSettings();
-      record({ title: 'Kick: resgate automático desligado após falha', ok: false, detail: ['Religue no painel quando quiser tentar de novo.'] });
+    // Recompensa pausada ou lista que não abriu: o canal espera 30 min. Só 4 falhas seguidas desligam a automação.
+    if (r.ok) kickFails = 0;
+    else {
+      kickFail.set(ch.slug, Date.now() + 30 * 60000);
+      if (++kickFails >= 4) {
+        kickFails = 0;
+        settings.auto.kick = false;
+        saveSettings();
+        record({ title: 'Kick: resgate automático desligado após 4 falhas seguidas', ok: false, detail: ['Religue no painel quando quiser tentar de novo.'] });
+      }
     }
   } catch (e) {
     record({ title: 'Kick: resgate automático falhou', ok: false, detail: [e.message] });
@@ -1237,6 +1262,7 @@ const AUTO_INFO = {
   restock: ['Ligar a recompra automática', 'O app passa a gastar Coins sozinho em poções, revives e Ultra Balls quando o estoque fica abaixo de 2 horas de uso.'],
   depot: ['Ligar a revisão automática do Depot', 'A cada 15 minutos o app guarda os nascimentos raros na Coleção e VENDE o resto ao NPC, sem perguntar.'],
   lives: ['Ligar o gerenciador de lives', 'O app passa a abrir sozinho os canais oficiais que entram ao vivo e a fechar os que saem. Na Kick ele mantém 2 lives abertas (só 2 contam pontos por vez), começando pelas suas preferidas.'],
+  pvp: ['Manter a fila do PvP ligada', 'O PvP Ranqueado roda sozinho enquanto você caça e perder não custa XP, só PR. O app confere a cada poucos minutos se a busca continua; se ela cair, liga a fila automática do jogo (recurso VIP), esconde a tela de batalha e procura partida de novo. Ele não mexe na sua equipe de PvP.'],
   kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar.`],
 };
 

@@ -553,8 +553,64 @@
   let lastStones = 0;
   let lastFlip = 0;
   let lastScanLv = window.__pkMap ? window.__pkMap.lv : 0;
+  // --- PvP Ranqueado: a fila automática é do próprio jogo (VIP). O app só confere se ela continua ligada ---
+  // e religa quando cai (o jogo a desliga numa recarga da página ou quando alguém cancela a busca).
+  const pvp = { last: 0, offSince: 0, info: null };
+  const pvpQueued = () => {
+    const p = document.getElementById('pvp-fila-pill');
+    return !!(p && p.offsetParent);
+  };
+  window.__pvpKeep = () =>
+    locked(async () => {
+      pvp.last = Date.now();
+      window.__menu('PvP');
+      await sl(1800);
+      const m = window.__top();
+      if (!m || !/Ranqueado/.test(m.innerText)) {
+        await P.closeAll();
+        return { ok: false, why: 'a tela do PvP não abriu' };
+      }
+      const done = [];
+      // Com a tela de batalha aberta as outras rotinas param para não clicar por cima dela.
+      const off = m.querySelector('input[name="pvp-tela"][value="off"]');
+      if (off && !off.checked) {
+        (off.closest('label') || off).click();
+        await sl(500);
+        done.push('tela de batalha: não mostrar');
+      }
+      const cb = m.querySelector('#pvp-auto-fila');
+      if (cb && !cb.checked) {
+        (cb.closest('label') || cb).click();
+        await sl(800);
+        done.push('fila automática ligada');
+      }
+      const btn = (t) => [...m.querySelectorAll('button')].find((b) => b.offsetParent && b.innerText.trim() === t);
+      if (!btn('Cancelar busca')) {
+        const go = btn('Procurar partida');
+        if (go && !go.disabled) {
+          go.click();
+          await sl(1500);
+          done.push('busca iniciada');
+        }
+      }
+      const t = m.innerText.replace(/\n+/g, ' | ');
+      const vd = t.match(/(\d+)V \/ (\d+)D \| (\d+)%/);
+      const pos = t.match(/([\d.]+)º de ([\d.]+)/);
+      pvp.info = { at: Date.now(), wins: vd ? +vd[1] : null, losses: vd ? +vd[2] : null, rate: vd ? +vd[3] : null, pos: pos ? P.num(pos[1]) : null, of: pos ? P.num(pos[2]) : null, searching: !!btn('Cancelar busca') || done.includes('busca iniciada') };
+      await P.closeAll();
+      if (done.length) note('PvP: ' + done.join(', '), [vd ? `${vd[1]}V / ${vd[2]}D (${vd[3]}%)` : 'placar não lido', pos ? `${pos[1]}º de ${pos[2]}` : '']);
+      return { ok: true, done, info: pvp.info };
+    });
+
   window.__pkTick = async (ticks) => {
     const A = window.__pkAuto || {};
+    if (A.pvp) {
+      // Durante a partida a pílula some por um ou dois minutos; só age se a busca ficar 4 min sem voltar.
+      if (pvpQueued()) pvp.offSince = 0;
+      else if (!pvp.offSince) pvp.offSince = Date.now();
+      const dropped = pvp.offSince && Date.now() - pvp.offSince > 4 * 60000;
+      if ((dropped || !pvp.info) && Date.now() - pvp.last > 5 * 60000 && !window.__top()) await window.__pvpKeep();
+    }
     if (A.guard !== false) await window.__guard();
     if (A.passe && Date.now() >= passe.nextAt) await window.__passeClaim();
     if (A.stones && Date.now() - lastStones > 60 * 60000 && ticks % 5 === 3) {
@@ -579,6 +635,7 @@
   window.__news = () => [...document.querySelectorAll('li[data-i18n-html^="aviso."]')].map((li) => li.textContent.trim().replace(/\s+/g, ' ')).filter(Boolean).slice(0, 8);
 
   window.__pkExtra = () => ({
+    pvp: pvp.info,
 
     passeNext: passe.nextAt || null,
     passeLast: passe.last,

@@ -13,7 +13,7 @@
     P.restock || {}
   );
   const KEEP = Object.assign({ potencia: 3, qualidade: 1.5, nota: 2.5, reservas: 2, reservaNivel: 80 }, P.keep || {});
-  window.__pkAuto = Object.assign({ restock: false, depot: false, guard: true, passe: true, stones: false, flip: false }, P.auto || {});
+  window.__pkAuto = Object.assign({ restock: false, depot: false, guard: true, passe: true, stones: false, flip: false, pvp: false }, P.auto || {});
 
   // As animações de enfeite do jogo (brilho de botões, faixa de evento) redesenham a tela na taxa do monitor
   // e eram quase todo o custo de CPU e de vídeo dele; sem elas o jogo funciona igual.
@@ -243,8 +243,9 @@
       return 'sem leitura';
     }
     const r = rates();
-    // Troca para Ultimate quando 70% do HP máximo passa de 3.000.
-    const pot = rd.maxHp * 0.7 >= 3000 ? ['Ultimate Potion', 1500] : ['Hyper Potion', 800];
+    // Ultimate quando 70% do HP máximo passa de 3.000; Golden (cura 50% do HP por 2.500) quando o HP passa de 10.000,
+    // ponto em que ela cura mais por Coin e com menos usos.
+    const pot = rd.maxHp >= 10000 ? ['Golden Potion', 2500] : rd.maxHp * 0.7 >= 3000 ? ['Ultimate Potion', 1500] : ['Hyper Potion', 800];
     let gold = rd.gold;
     const can = (unit, q) => Math.max(0, Math.min(q, Math.floor((gold - CFG.reserve) / unit)));
     const plans = [
@@ -535,6 +536,16 @@
     for (const rb of [...regionButtons(), ...regionButtons()]) {
       rb.click();
       await sl(900);
+      // Outland tem 8 degraus com o mesmo mapa e o mesmo XP; o mais alto liberado dá mais drops raros.
+      const os = document.querySelector('select.mapa-outland-sel');
+      if (os && os.offsetParent) {
+        const best = [...os.options].filter((o) => !o.disabled).pop();
+        if (best && os.value !== best.value) {
+          os.value = best.value;
+          os.dispatchEvent(new Event('change', { bubbles: true }));
+          await sl(900);
+        }
+      }
       // Procura na página inteira: logo depois de abrir o jogo, um aviso pode surgir por cima do mapa.
       const b = [...document.querySelectorAll('button.marcador')].find((x) => x.offsetParent && x.dataset.slug === slug);
       if (!b) continue;
@@ -559,8 +570,11 @@
       await closeAll();
       return { ok: false, why: 'marcador coberto por outro elemento', ...info };
     }
+    const over = window.__top();
+    const seen = over ? over.innerText.trim().split('\n')[0].slice(0, 40) : 'nenhuma';
+    const n = document.querySelectorAll('button.marcador').length;
     await closeAll();
-    return { ok: false, why: 'área não encontrada no mapa' };
+    return { ok: false, why: `área não encontrada no mapa (janela na frente: ${seen}; ${n} marcadores visíveis)` };
   };
   // Logo depois de abrir o jogo a primeira tentativa pode falhar (a tela ainda está se montando): tenta de novo uma vez.
   window.__mapLocate = async (slug) => {
@@ -845,6 +859,14 @@
     },
   };
 
+  // PvP Ranqueado: rank e PR ficam no painel do treinador; a pílula no alto do jogo existe enquanto a busca corre.
+  const pvpNow = () => {
+    const box = document.getElementById('tr-rank-box');
+    const nome = document.getElementById('tr-rank-nome');
+    const pr = box && box.innerText.match(/([\d.]+)\s*PR/);
+    const pill = document.getElementById('pvp-fila-pill');
+    return { rank: nome ? nome.innerText.trim() : null, pr: pr ? num(pr[1]) : null, queued: !!(pill && pill.offsetParent) };
+  };
   window.__pkState = () => {
 
     let rd, st;
@@ -875,6 +897,7 @@
       unlocked: window.__pkMap ? window.__pkMap.marks.filter((m) => !m.locked).length : null,
       version: (document.body.innerText.match(/\bv\d+\.\d+\.\d+\b/g) || []).pop() || null,
       extra: window.__pkExtra ? window.__pkExtra() : null,
+      pvp: pvpNow(),
       twitch: tw ? tw[1] + '%' : null,
       kick: buffs.kick,
       kickAt: buffs.kickAt,

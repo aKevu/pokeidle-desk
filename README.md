@@ -39,7 +39,7 @@ O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma
 
 | Aba | O que tem |
 |---|---|
-| **Resumo** | Nível, XP por hora, previsão de nível, estoque em horas, bônus ativos, consumo de CPU e memória |
+| **Resumo** | Nível, XP por hora, previsão de nível, estoque em horas, bônus ativos, rank do PvP, consumo de CPU e memória |
 | **Caça** | Estimativa de XP por hora de cada área liberada, teste real de uma área, troca de área, melhor equipe, evolução, Oferenda |
 | **Mercado** | Venda das pedras que sobram e radar de flip no Mercado da Comunidade |
 | **Lives** | Canais oficiais ao vivo, preferidos da Kick, pontos, resgate de bônus, abrir e fechar cada live |
@@ -51,12 +51,13 @@ O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma
 
 - **Proteção contra parada**: personagem 5 minutos parado no Centro sem você pedir → cura a equipe e volta para a última área (só repõe o estoque se a Recompra estiver ligada).
 - **Proteção das automações do jogo**: religa bola, poção, revive e volta à caça se desligarem.
-- **Recompra**: mantém poções, revives e Ultra Balls pelo consumo medido, até os tetos configurados.
+- **Recompra**: mantém poções, revives e Ultra Balls pelo consumo medido, até os tetos configurados. A poção acompanha o HP do pokémon: Hyper, Ultimate e, acima de 10.000 de HP, Golden.
 - **Depot**: guarda na Coleção shiny, potência, qualidade ou nota altas e algumas reservas por espécie; vende o resto ao NPC.
 - **Passe diário**: resgata a recompensa grátis.
 - **Melhor área automática**: quando uma região libera, testa a melhor candidata por alguns minutos e só fica se medir mais XP.
 - **Lives**: abre os canais oficiais que entram ao vivo e fecha os que saem. Na Kick mantém só 2 abertas (veja abaixo).
-- **Kick**: troca pontos de canal por horas de +15% de XP.
+- **Kick**: troca pontos de canal por horas de +15% de XP. Se um resgate falhar, o canal espera 30 minutos; só 4 falhas seguidas desligam a automação.
+- **PvP**: confere se a busca do Ranqueado continua e religa a fila automática do jogo (recurso VIP) quando ela cai. Perder no PvP não custa XP, só PR. O app não mexe na sua equipe de PvP.
 - **Pedras**: anuncia no mercado as que sobram.
 - **Flip**: compra anúncios baratos e reanuncia. Usa seus Coins e pode dar prejuízo.
 

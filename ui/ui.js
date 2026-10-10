@@ -218,6 +218,16 @@ function pageResumo(s) {
       row('Kick (+15%)', g.kick ? `${g.kick} restantes` : 'ainda não lido', g.kick ? 'ok' : null),
       row('Passe diário', x.passeNext && x.passeNext > Date.now() ? `próximo às ${hhmm(x.passeNext)}` : 'checando…'),
     ]),
+    h2('PvP Ranqueado', g.pvp && g.pvp.queued ? 'na fila' : ''),
+    card(
+      g.pvp && g.pvp.rank
+        ? [
+            row('Rank', `${g.pvp.rank}${g.pvp.pr != null ? ' · ' + fmt(g.pvp.pr) + ' PR' : ''}`),
+            row('Busca', g.pvp.queued ? 'procurando partida' : 'parada ou em partida', g.pvp.queued ? 'ok' : null),
+            x.pvp && x.pvp.wins != null ? row('Placar da semana', `${x.pvp.wins}V / ${x.pvp.losses}D · ${x.pvp.rate}%${x.pvp.pos ? ' · ' + fmt(x.pvp.pos) + 'º' : ''}`) : null,
+          ].filter(Boolean)
+        : [el('div', 'empty', 'Sem rank lido ainda.')]
+    ),
     h2('Ações rápidas', 'cada uma pede confirmação só na primeira vez'),
     grid([
       actionBtn(s, 'Verificar agora', 'refresh', true, 'Atualiza jogo e lives e grava um resumo no histórico (não muda nada)'),
@@ -395,6 +405,9 @@ const AUTOS = [
   ['Lives', [
     ['lives', 'Gerenciar as lives', () => 'Abre os canais oficiais que entram ao vivo e fecha os que saem. Na Kick mantém 2 abertas, começando pelas preferidas.'],
     ['kick', 'Resgatar XP da Kick', (s) => `Quando um canal junta ${s.kickHour} pontos, resgata 1 h de +15% de XP.`],
+  ]],
+  ['PvP', [
+    ['pvp', 'Manter a fila do PvP', () => 'Confere se a busca do Ranqueado continua e religa a fila automática do jogo (VIP) quando cai. Perder não custa XP.'],
   ]],
   ['Mercado', [
     ['stones', 'Vender pedras que sobram', (s) => `De hora em hora anuncia as pedras além de ${s.config['market.keepStones']} por tipo, 1 Coin abaixo do menor preço.`],
