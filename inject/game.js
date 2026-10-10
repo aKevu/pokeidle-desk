@@ -931,6 +931,17 @@
     const pill = document.getElementById('pvp-fila-pill');
     return { rank: nome ? nome.innerText.trim() : null, pr: pr ? num(pr[1]) : null, queued: !!(pill && pill.offsetParent) };
   };
+  // Níveis das áreas de caça de todas as regiões (as trancadas também): a escada é um módulo do próprio jogo.
+  // Serve para a previsão de nível contar com o XP das áreas que ainda vão liberar.
+  if (!window.__pkLadder) {
+    import('/shared/escala-hunt-level.mjs')
+      .then((m) => {
+        const out = new Set([10, 20, 30, 40, 50, 60, 70, 80, 100, 150]);
+        for (const r of m.REGIOES_GERACAO) for (const x of m.escadaDe(r.gate, r.next)) out.add(x);
+        window.__pkLadder = [...out].filter((x) => x > 0).sort((a, b) => a - b);
+      })
+      .catch(() => {});
+  }
   window.__pkState = () => {
 
     let rd, st;
@@ -963,6 +974,7 @@
       version: ((document.getElementById('versao') || {}).innerText || '').trim().match(/^v\d+\.\d+\.\d+$/) ? document.getElementById('versao').innerText.trim() : null,
       extra: window.__pkExtra ? window.__pkExtra() : null,
       pvp: pvpNow(),
+      ladder: window.__pkLadder || null,
       twitch: tw ? tw[1] + '%' : null,
       twMore: !!document.querySelector('.tr-ativo.twitch.tw-tem-mais'),
       kick: buffs.kick,

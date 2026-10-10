@@ -138,6 +138,34 @@ let ladderOpen = false;
 try {
   ladderOpen = localStorage.getItem('pk_ladder') === '1';
 } catch (e) {}
+// XP de um abate pelo nível da área: a fórmula do próprio jogo (shared/sell-value.mjs).
+const xpKill = (n) => (n <= 150 ? Math.floor((6 * n * n) / 10) + 8 : Math.round(13500 * (n / 150) ** 1.25));
+// Níveis das áreas de caça, para quando o jogo ainda não informou a escada dele.
+const HUNT_LEVELS = [10, 20, 30, 40, 50, 60, 70, 80, 100, 150, 500, 550, 600, 650, 700, 750, 800, 850, 1000, 1250, 1500, 2000, 2500, 3000, 5000, 6000, 6500, 8000, 10000, 12500, 15000, 20000, 25000, 30000, 50000];
+// Horas até cada meta. O ritmo de hoje vale só para a área de hoje: a cada área nova que o nível libera, o XP por abate
+// sobe pela fórmula do jogo. Supõe o mesmo número de abates por hora e os mesmos bônus de agora, e que você continua
+// caçando na mesma altura em relação ao seu nível (hoje, área ÷ nível).
+function project(g, rate, targets) {
+  const out = new Map();
+  const max = Math.max(...targets);
+  const levels = (g.ladder && g.ladder.length ? g.ladder : HUNT_LEVELS).slice().sort((a, b) => a - b);
+  const areaNow = g.area && g.area.lv > 0 ? g.area.lv : 0;
+  const ratio = areaNow ? Math.min(1, Math.max(0.5, areaNow / g.lv)) : 0;
+  const base = areaNow ? xpKill(areaNow) : 1;
+  let i = 0;
+  let hours = 0;
+  for (let lv = g.lv; lv < max; lv++) {
+    let area = areaNow;
+    if (areaNow) {
+      while (i + 1 < levels.length && levels[i + 1] <= lv * ratio) i++;
+      if (levels[i] <= lv * ratio && levels[i] > area) area = levels[i];
+    }
+    const need = xpTotal(lv + 1) - xpTotal(lv) - (lv === g.lv ? g.xp : 0);
+    hours += need / (areaNow ? (rate * xpKill(area)) / base : rate);
+    if (targets.includes(lv + 1)) out.set(lv + 1, { hours, area });
+  }
+  return out;
+}
 const regionAt = (lv) => (REGIONS.find(([l]) => l === lv) || [])[1];
 function eta(hours) {
   if (!isFinite(hours)) return '–';
@@ -233,6 +261,7 @@ function pageResumo(s) {
   const r = g.rates || {};
   const have = xpTotal(g.lv) + g.xp;
   const targets = ladderOpen ? levelLadder(g.lv) : levelTargets(g.lv);
+  const proj = r.xp > 0 ? project(g, r.xp, targets) : new Map();
   const x = g.extra || {};
   nodes.push(
     h2('Conta'),
@@ -243,11 +272,11 @@ function pageResumo(s) {
       row('Vendidos ao NPC nesta sessão', g.stats.sold ? `${g.stats.sold} · ${fmt(g.stats.soldGold)}` : '0'),
       row('Guardados na Coleção nesta sessão', String(g.stats.kept)),
     ]),
-    h2('Previsão de nível', r.xp > 0 ? 'no ritmo atual' : ''),
+    h2('Previsão de nível', r.xp > 0 ? 'subindo de área com o nível' : ''),
     card(
       targets.length && r.xp > 0
         ? targets
-            .map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta((xpTotal(t) - have) / r.xp)))
+            .map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta(proj.get(t) ? proj.get(t).hours : NaN)))
             .concat(
               btn(ladderOpen ? 'Mostrar só as próximas' : `Mostrar a sequência inteira (${levelLadder(g.lv).length} metas)`, 'wide mini', () => {
                 ladderOpen = !ladderOpen;
@@ -255,7 +284,8 @@ function pageResumo(s) {
                   localStorage.setItem('pk_ladder', ladderOpen ? '1' : '0');
                 } catch (e) {}
                 if (last) render(last);
-              }, 'De 50 em 50 até o Nv 1.000, de 100 em 100 até 5.000, de 500 em 500 até 10.000 e de 1.000 em 1.000 daí em diante')
+              }, 'De 50 em 50 até o Nv 1.000, de 100 em 100 até 5.000, de 500 em 500 até 10.000 e de 1.000 em 1.000 daí em diante'),
+              el('div', 'note', 'Conta com o XP por abate das áreas que o nível vai liberando (fórmula do jogo), com os abates por hora e os bônus de agora. O XP de cada nível cresce mais rápido que o XP por abate, por isso as metas distantes continuam longe.')
             )
         : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]
     ),
