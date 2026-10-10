@@ -109,16 +109,20 @@ function renderNav(s) {
 const xpTotal = (lv) => (50 / 3) * (lv ** 3 - 6 * lv ** 2 + 17 * lv - 12);
 // Metas da previsão: os próximos múltiplos de 50, sem teto, mais a próxima região do Mapa se ela ficar além deles.
 const REGIONS = [[150, 'Outland'], [500, 'Hoenn'], [1000, 'Sinnoh'], [5000, 'Unova'], [10000, 'Kalos'], [25000, 'Alola']];
+// Sem teto: passado o nível da última região, seguem só os múltiplos de 50.
 const levelTargets = (lv) => {
   const first = (Math.floor(lv / 50) + 1) * 50;
   const out = [0, 1, 2, 3].map((i) => first + i * 50);
-  const next = REGIONS.find(([l]) => l > lv);
-  if (next && !out.includes(next[0])) out.push(next[0]);
+  for (const [l] of REGIONS) if (l > lv && !out.includes(l)) out.push(l);
   return out.sort((a, b) => a - b);
 };
 const regionAt = (lv) => (REGIONS.find(([l]) => l === lv) || [])[1];
 function eta(hours) {
   if (!isFinite(hours)) return '–';
+  // Metas distantes: a hora do relógio deixa de fazer sentido, fica só a duração.
+  const years = hours / (24 * 365);
+  if (years >= 1) return `${years < 10 ? dec(years) : fmt(years)} anos`;
+  if (hours >= 24 * 30) return `${fmt(Math.round(hours / 24))} dias`;
   const when = new Date(Date.now() + hours * 3600000);
   const days = Math.floor((when.getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000);
   const dur = hours < 1 ? Math.round(hours * 60) + ' min' : hours < 48 ? dec(hours) + ' h' : dec(hours / 24) + ' dias';
@@ -183,7 +187,7 @@ function pageResumo(s) {
   // Automações que gastam ou vendem vêm desligadas; o passo some depois de abrir a aba Auto ou ligar alguma.
   const autoDone = autoSeen || SPENDING.some((k) => s.settings.auto[k]);
   // Primeiros passos: aparece enquanto falta algum.
-  if (!logged || !g.hunting || (open && (!tw || !kk)) || !autoDone) {
+  if (!logged || !g.hunting || (open && !tw && !kk) || !autoDone) {
     const step = (done, title, sub, button) => {
       const d = el('div', 'step' + (done ? ' done' : ''));
       const t = el('div');
@@ -195,8 +199,8 @@ function pageResumo(s) {
     const steps = el('div', 'steps');
     steps.append(
       step(logged, 'Entrar no jogo', 'Na aba PokéIdle, com a sua conta.'),
-      step(tw && kk, 'Entrar nas lives', open ? `Twitch ${tw ? 'ok' : 'sem login'} · Kick ${kk ? 'ok' : 'sem login'}. Abre o Chrome; entre e feche a janela.` : 'Nenhuma live oficial aberta agora para conferir.', actionBtn(s, 'Login das lives', 'login', true, null, null, 'mini primary')),
-      step(logged && g.hunting, 'Começar a caçar', 'Escolha uma área no mapa do jogo; o app assume a partir daí.', s.settings.lastHunt && logged && !g.hunting ? actionBtn(s, 'Voltar: ' + s.settings.lastHunt.name, 'recover', true, null, s.settings.lastHunt, 'mini primary') : null),
+      step(tw || kk, 'Entrar nas lives', open ? `Twitch ${tw ? 'ok' : 'sem login'} · Kick ${kk ? 'ok' : 'sem login'}. Abre o Chrome (ou o Edge); entre e feche a janela. Basta uma das duas.` : 'Nenhuma live oficial aberta agora para conferir.', actionBtn(s, 'Login das lives', 'login', true, null, null, 'mini primary')),
+      step(logged && g.hunting, 'Começar a caçar', 'Escolha uma área no mapa do jogo. Daí em diante, se o personagem ficar 5 min parado no Centro, o app o leva de volta para essa área (dá para desligar na aba Auto, ou usar "Ir ao Centro" do painel para ele ficar parado).', s.settings.lastHunt && logged && !g.hunting ? actionBtn(s, 'Voltar: ' + s.settings.lastHunt.name, 'recover', true, null, s.settings.lastHunt, 'mini primary') : null),
       step(autoDone, 'Escolher as automações', 'Recompra, venda do Depot, pedras, Kick e flip vêm desligados. Ligue só o que quiser.', btn('Abrir Auto', 'mini primary', () => showPage('auto')))
     );
     nodes.push(h2('Primeiros passos'), card([steps]));
@@ -217,7 +221,7 @@ function pageResumo(s) {
       row('Vendidos ao NPC nesta sessão', g.stats.sold ? `${g.stats.sold} · ${fmt(g.stats.soldGold)}` : '0'),
       row('Guardados na Coleção nesta sessão', String(g.stats.kept)),
     ]),
-    h2('Previsão de nível', r.xp > 0 ? 'no ritmo atual' : ''),
+    h2('Previsão de nível', r.xp > 0 ? 'no ritmo atual · de 50 em 50, sem teto' : ''),
     card(targets.length && r.xp > 0 ? targets.map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta((xpTotal(t) - have) / r.xp))) : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]),
     h2('Estoque', `teto: ${fmt(s.config['restock.potMax'])} poções`),
     card([stockRow('Poções', g.pot, r.pot), row('Revives', fmt(g.rev), g.rev >= 0 && g.rev < 30 ? 'warn' : null), stockRow('Ultra Balls', g.balls, r.balls)]),
@@ -225,7 +229,7 @@ function pageResumo(s) {
     card([
       row('Twitch', g.twitch ? '+' + g.twitch : 'sem live contando', g.twitch ? 'ok' : 'warn'),
       row('Kick (+15%)', g.kick ? `${g.kick} restantes` : 'ainda não lido', g.kick ? 'ok' : null),
-      row('Passe diário', x.passeNext && x.passeNext > Date.now() ? `próximo às ${hhmm(x.passeNext)}` : 'checando…'),
+      row('Passe diário', x.passeNext && x.passeNext > Date.now() ? `próximo às ${hhmm(x.passeNext)}` : s.settings.auto.passe ? 'checando…' : 'automação desligada'),
     ]),
     h2('PvP Ranqueado', g.pvp && g.pvp.queued ? 'na fila' : ''),
     card(
@@ -272,13 +276,16 @@ function pageCaca(s) {
       actionBtn(s, 'Calcular áreas', 'areas', hunting, 'Estima o XP por hora de cada área liberada (não muda nada)', null, 'primary'),
       hunting ? actionBtn(s, 'Ir ao Centro', 'centro', true, 'Interrompe a caça atual') : actionBtn(s, lastHunt ? 'Voltar: ' + lastHunt.name : 'Voltar à área', 'recover', !!lastHunt, 'Cura a equipe e entra de novo na última área', lastHunt),
       actionBtn(s, 'Melhor equipe', 'team', true, 'Troca as reservas pelas mais fortes da Coleção (vai ao Centro e volta)'),
-      actionBtn(s, evolve || 'Evoluir', 'evolve', !!evolve, 'Evolui o pokémon em campo, se o requisito estiver cumprido'),
+      actionBtn(s, evolve || 'Evoluir', 'evolve', !!evolve, /mega/i.test(evolve || '') ? 'Mega evolução do pokémon em campo: precisa da Mega Stone da espécie na bolsa e não tem volta. Sem a pedra, nada acontece.' : 'Evolui o pokémon em campo, se o requisito estiver cumprido. Evolução não tem volta.'),
       actionBtn(s, 'Oferenda do Depot', 'oferenda', true, 'Oferece o que estiver no Depot em troca de chance de pedras', null, 'wide'),
     ]),
   ];
   const a = g.advice;
   const measures = s.settings.measures || {};
-  nodes.push(h2('Áreas', a ? `estimativa das ${hhmm(a.at)}` : ''));
+  const old = a && (Date.now() - a.at > 6 * 3600000 || (g.area && a.base && a.base.name !== g.area.name));
+  const when = a ? (new Date(a.at).toDateString() === new Date().toDateString() ? `das ${hhmm(a.at)}` : `de ${new Date(a.at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`) : '';
+  nodes.push(h2('Áreas', a ? `estimativa ${when}` : ''));
+  if (old) nodes.push(el('div', 'tip', `Estimativa desatualizada: foi calculada com ${a.me} caçando em ${a.base.name}. Ela se refaz sozinha depois de uns minutos de caça; "Calcular áreas" refaz agora.`));
   if (!a) {
     nodes.push(el('div', 'empty', 'Use "Calcular áreas" durante uma caça para comparar as áreas liberadas.'));
     return nodes;
@@ -293,7 +300,7 @@ function pageCaca(s) {
     if (m && m.xph) bits.push(`medido ${mi(m.xph)}/h`);
     bits.push(`${dec(x.sKill)} s por abate`, `vantagem ×${dec(x.mult, 2)}`);
     if (x.risk != null) bits.push(`dano recebido ×${dec(x.risk, 2)}`);
-    bits.push(`capturas ~${fmt(Math.max(0, x.capGold))}/h`);
+    if (x.capGold > 0) bits.push(`capturas rendem ~${fmt(x.capGold)} Coins/h`);
     const btns = el('div', 'btns');
     const arg = { slug: x.slug, name: x.name, lv: x.lv };
     if (!x.current) {
@@ -371,7 +378,7 @@ function pageLives(s) {
   }
   // Ao vivo primeiro; offline no fim, sem botões.
   const order = (c) => (c.open ? 0 : c.live === true ? 1 : c.live === null ? 2 : 3);
-  const list = [...ch].filter((c) => c.open || c.live !== false).sort((a, b) => order(a) - order(b));
+  const list = [...ch].filter((c) => c.open || (c.live !== false && (c.kind !== 'kick' || c.closedByUser))).sort((a, b) => order(a) - order(b));
   if (!list.length) nodes.push(el('div', 'empty', 'Nenhum canal oficial ao vivo agora.'));
   for (const c of list) {
     const it = el('div', 'item');
@@ -403,7 +410,7 @@ function pageLives(s) {
 const AUTOS = [
   ['Proteções', [
     ['watchdog', 'Proteção contra parada', () => 'Parado 5 min no Centro sem você pedir: cura e volta para a última área. Só repõe o estoque se a Recompra estiver ligada.'],
-    ['guard', 'Proteção das automações do jogo', () => 'Religa bola, poção, revive e volta à caça se desligarem; troca o item selecionado se acabar.'],
+    ['guard', 'Proteção das automações do jogo', () => 'Religa as automações do jogo (bola, poção, revive, volta à caça) que já estavam ligadas e se desligaram; troca o item selecionado se acabar.'],
   ]],
   ['Rotina', [
     ['restock', 'Recompra automática', (s) => `Repõe para ${s.config['restock.hours']} h de uso quando sobra menos de 2 h, até os tetos dos Ajustes.`],
@@ -506,6 +513,7 @@ const FIELDS = [
   ['Lives', [
     ['maxTwitch', 'Máximo de lives da Twitch', 'Cada live custa perto de 2,5% de CPU.'],
     ['maxKick', 'Lives da Kick abertas (0 a 2)', 'A Kick só conta pontos em 2 canais por vez; 0 fecha todas.'],
+    ['kickQuality', 'Qualidade do vídeo da Kick', '160, 360, 480, 720 ou 1080; 0 deixa a Kick escolher. Menor gasta menos CPU. Vale nas lives abertas a partir de agora.'],
   ]],
   ['Mercado', [
     ['market.keepStones', 'Pedras guardadas por tipo', 'O que passar disso é anunciado.'],
@@ -521,7 +529,7 @@ const FIELDS = [
 ];
 let ajustesKey = '';
 function pageAjustes(s) {
-  const nodes = [el('div', 'note', 'Valem na hora e ficam guardados. As listas de canais oficiais ficam no arquivo config.json.')];
+  const nodes = [el('div', 'note', 'Valem na hora e ficam guardados. A lista de canais oficiais é lida do próprio jogo.')];
   const asked = Object.keys(s.settings.approved || {}).length;
   const reset = btn('Voltar a pedir confirmações', 'wide', () => window.pk.resetApprovals(), 'As ações e automações voltam a pedir as duas confirmações na próxima vez');
   reset.disabled = !asked;
@@ -537,9 +545,25 @@ function pageAjustes(s) {
           inp.type = 'number';
           inp.step = 'any';
           const k = factor || 1;
-          inp.value = +(s.config[key] * k).toFixed(4);
-          inp.onchange = () => window.pk.setConfig(key, +inp.value / k);
-          f.append(el('span', null, label), inp, el('small', null, help));
+          const cur = +(s.config[key] * k).toFixed(4);
+          const lim = (s.limits || {})[key];
+          inp.value = cur;
+          if (lim) {
+            inp.min = lim[0] * k;
+            inp.max = lim[1] * k;
+          }
+          const small = el('small', null, help);
+          inp.onchange = () => {
+            const v = inp.value === '' ? NaN : +inp.value / k;
+            if (!isFinite(v) || (lim && (v < lim[0] || v > lim[1]))) {
+              inp.value = cur;
+              small.textContent = lim ? `Valor recusado: use de ${dec(lim[0] * k, 2)} a ${dec(lim[1] * k, 2)}. Continua valendo ${dec(cur, 2)}.` : 'Valor recusado.';
+              small.className = 'bad';
+              return;
+            }
+            window.pk.setConfig(key, v);
+          };
+          f.append(el('span', null, label), inp, small);
           return f;
         })
       )

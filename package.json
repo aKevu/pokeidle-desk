@@ -1,6 +1,6 @@
 {
   "name": "pokeidle-desk",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "Hub de mesa para o PokéIdle: jogo, lives oficiais da Twitch e da Kick e automações num só lugar",
   "main": "main.js",

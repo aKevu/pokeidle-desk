@@ -31,7 +31,8 @@ const setPath = (obj, key, value) => {
   for (const p of parts) o = o[p] = o[p] || {};
   o[last] = value;
 };
-for (const [k, v] of Object.entries(userCfg)) setPath(cfg, k, v);
+// Só entram as chaves conhecidas e dentro da faixa: um valor estranho no arquivo não pode virar regra de compra ou venda.
+// (TUNABLE é declarado logo abaixo; a aplicação acontece depois dele.)
 // O que o painel pode ajustar, com os limites aceitos.
 const TUNABLE = {
   'restock.hours': [1, 24],
@@ -45,6 +46,7 @@ const TUNABLE = {
   'keep.reservas': [0, 10],
   'keep.reservaNivel': [1, 100000],
   maxTwitch: [0, 20],
+  kickQuality: [0, 1080],
   maxKick: [0, 2],
   'market.keepStones': [0, 99],
   'market.flipBudget': [0, 1e10],
@@ -57,6 +59,15 @@ const TUNABLE = {
 const PARTITION = 'persist:pokeidle';
 const BAR = 40;
 const SIDE = 400;
+for (const [k, v] of Object.entries(userCfg)) {
+  if (k === 'debugPort') {
+    if (Number.isInteger(v) && v >= 0 && v < 65536) cfg.debugPort = v;
+    continue;
+  }
+  const lim = TUNABLE[k];
+  if (lim && typeof v === 'number' && isFinite(v) && v >= lim[0] && v <= lim[1]) setPath(cfg, k, v);
+  else delete userCfg[k];
+}
 const SETTINGS = path.join(DATA, 'settings.json');
 const HISTORY = path.join(DATA, 'history.json');
 // Lives fora de foco ficam pequenas atrás da aba ativa: o player baixa a qualidade sozinho e gasta menos CPU.
@@ -122,17 +133,59 @@ const settings = {
   updateSeen: null,
   // Canais da Kick preferidos, na ordem em que foram marcados.
   kickPrefs: [],
+  // Canais oficiais lidos do próprio jogo (substituem os do config.json quando existem).
+  roster: null,
 };
 {
   const saved = readJson(SETTINGS, {});
   if (typeof saved.panel === 'boolean') settings.panel = saved.panel;
   Object.assign(settings.auto, saved.auto || {});
   if (Array.isArray(saved.closed)) settings.closed = saved.closed;
+  const okList = (l) => Array.isArray(l) && l.length >= 3 && l.every((s) => typeof s === 'string' && /^[a-z0-9_]{2,30}$/.test(s));
+  if (saved.roster && okList(saved.roster.twitch) && okList(saved.roster.kick)) {
+    settings.roster = { twitch: saved.roster.twitch, kick: saved.roster.kick };
+    cfg.twitch = settings.roster.twitch.slice();
+    cfg.kick = settings.roster.kick.slice();
+  }
   if (Array.isArray(saved.kickPrefs)) settings.kickPrefs = saved.kickPrefs.filter((s) => cfg.kick.includes(s));
   for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen']) if (saved[k] != null) settings[k] = saved[k];
 
 }
-const saveSettings = () => fs.writeFile(SETTINGS, JSON.stringify(settings, null, 2), () => {});
+// Gravações em rajada viram uma só, feita num arquivo temporário e trocada no fim: um arquivo pela metade
+// seria lido como vazio na próxima abertura e devolveria as automações ao padrão.
+const savers = new Map();
+function saveJson(file, text) {
+  let st = savers.get(file);
+  if (!st) savers.set(file, (st = { timer: null, busy: false, text: null }));
+  st.text = text;
+  if (st.timer || st.busy) return;
+  st.timer = setTimeout(() => {
+    st.timer = null;
+    st.busy = true;
+    const body = st.text();
+    st.text = null;
+    fs.writeFile(file + '.tmp', body, (err) => {
+      const done = () => {
+        st.busy = false;
+        if (st.text) saveJson(file, st.text);
+      };
+      if (err) return done();
+      fs.rename(file + '.tmp', file, done);
+    });
+  }, 200);
+}
+// Na saída do app, o que estiver pendente é gravado na hora.
+function flushJson() {
+  for (const [file, st] of savers) {
+    if (!st.text) continue;
+    clearTimeout(st.timer);
+    try {
+      fs.writeFileSync(file, st.text());
+    } catch (e) {}
+    st.text = null;
+  }
+}
+const saveSettings = () => saveJson(SETTINGS, () => JSON.stringify(settings, null, 2));
 
 // Histórico de tudo o que o app e as automações fizeram; sobrevive a reinícios.
 const history = readJson(HISTORY, []);
@@ -142,7 +195,7 @@ function record(entry) {
   history.push(e);
   history.sort((a, b) => a.t - b.t);
   if (history.length > 600) history.splice(0, history.length - 600);
-  fs.writeFile(HISTORY, JSON.stringify(history), () => {});
+  saveJson(HISTORY, () => JSON.stringify(history));
   log(e.ok === false ? 'FALHOU' : 'ok', e.title);
 }
 
@@ -183,7 +236,36 @@ function onHost(tab) {
   }
 }
 
-const js = (tab, expr) => tab.view.webContents.executeJavaScript(expr, true);
+// Um script que nunca responde (aba recarregada ou caída no meio) deixaria o app preso em "Em andamento":
+// toda chamada tem prazo e termina com erro se a página for embora.
+const JS_TIMEOUT = 9 * 60000; // maior que a rotina mais longa (radar de flip)
+function js(tab, expr, ms) {
+  const wc = tab.view.webContents;
+  return new Promise((resolve, reject) => {
+    let over = false;
+    const end = (fn, v) => {
+      if (over) return;
+      over = true;
+      clearTimeout(timer);
+      wc.removeListener('did-start-navigation', nav);
+      wc.removeListener('render-process-gone', gone);
+      wc.removeListener('destroyed', gone);
+      fn(v);
+    };
+    const nav = (e, _url, inPlace, mainFrame) => {
+      const main = e && typeof e.isMainFrame === 'boolean' ? e.isMainFrame : mainFrame;
+      const same = e && typeof e.isSameDocument === 'boolean' ? e.isSameDocument : inPlace;
+      if (main && !same) end(reject, new Error('a página foi recarregada no meio da rotina'));
+    };
+    const gone = () => end(reject, new Error('a aba caiu ou foi fechada no meio da rotina'));
+    const timer = setTimeout(() => end(reject, new Error('a página não respondeu a tempo')), ms || JS_TIMEOUT);
+    if (wc.isDestroyed()) return gone();
+    wc.on('did-start-navigation', nav);
+    wc.on('render-process-gone', gone);
+    wc.on('destroyed', gone);
+    wc.executeJavaScript(expr, true).then((v) => end(resolve, v), (e) => end(reject, e));
+  });
+}
 const gameTab = () => [...tabs.values()].find((t) => t.kind === 'game');
 const findTab = (kind, slug) => [...tabs.values()].find((t) => t.kind === kind && t.slug === slug);
 const streamTabs = () => [...tabs.values()].filter((t) => t.kind === 'twitch' || t.kind === 'kick');
@@ -219,6 +301,8 @@ function isHost(url, hosts) {
 const isGoogleLogin = (url) => isHost(url, ['accounts.google.com']);
 // O botão de exportar a Pokédex do jogo tenta abrir o ChatGPT; o app só quer os dados.
 const isUnwanted = (url) => isHost(url, ['chatgpt.com', 'openai.com']);
+// Sites que podem abrir dentro do app: o jogo, as lives e os logins que eles usam.
+const isKnown = (url) => isHost(url, ['pokeidle.io', 'twitch.tv', 'kick.com', 'discord.com', 'discordapp.com']);
 
 // O Google recusa login dentro de apps embutidos; em vez da tela de erro dele, aponta o caminho que funciona.
 let googleNoticeAt = 0;
@@ -239,7 +323,7 @@ async function inject(tab) {
   if (!onHost(tab)) return;
   const dir = path.join(ROOT, 'inject');
   const files = fs.readdirSync(dir).filter((f) => f === tab.kind + '.js' || (f.startsWith(tab.kind + '-') && f.endsWith('.js'))).sort((a, b) => a.length - b.length || a.localeCompare(b));
-  const head = `window.__PK_CFG=${JSON.stringify({ restock: cfg.restock, keep: cfg.keep, market: cfg.market, auto: settings.auto, slug: tab.slug })};\n`;
+  const head = `window.__PK_CFG=${JSON.stringify({ restock: cfg.restock, keep: cfg.keep, market: cfg.market, auto: settings.auto, slug: tab.slug, kickQuality: cfg.kickQuality })};\n`;
   for (const [i, f] of files.entries()) {
     try {
       await js(tab, (i ? '' : head) + fs.readFileSync(path.join(dir, f), 'utf8'));
@@ -265,11 +349,13 @@ async function collect() {
   collecting = true;
   try {
     for (const tab of tabs.values()) {
-      if (!onHost(tab)) continue;
-      try {
-        const st = await js(tab, 'window.__pkState ? window.__pkState() : null');
-        if (st) tab.state = Object.assign(st, { at: Date.now() });
-      } catch (e) {}
+      // Aba fora do site dela, ou três leituras seguidas sem resposta: o último estado deixa de valer.
+      let st = null;
+      if (onHost(tab)) st = await js(tab, 'window.__pkState ? window.__pkState() : null', 15000).catch(() => null);
+      if (st) {
+        tab.state = Object.assign(st, { at: Date.now() });
+        tab.miss = 0;
+      } else if (!onHost(tab) || ++tab.miss >= 3) tab.state = null;
     }
     // O que o script do jogo registrou (compras, vendas, capturas guardadas) entra no histórico geral.
     const g = gameTab();
@@ -300,6 +386,7 @@ const held = (id, cond, ms) => {
   return Date.now() - since.get(id) >= ms;
 };
 
+let adviceTry = 0;
 async function watch(g) {
   const now = Date.now();
   // Área atual lembrada para a proteção saber para onde voltar.
@@ -330,6 +417,15 @@ async function watch(g) {
 
   if (running) return;
 
+  // Estimativa das áreas refeita sozinha a cada 2 h de caça ou quando a área muda. É só conta sobre a Pokédex
+  // já guardada: sem ela (primeiro uso) fica para o botão "Calcular áreas".
+  const adv = g.advice;
+  const stale = !adv || now - adv.at > 2 * 3600000 || (g.area && adv.base && adv.base.name !== g.area.name);
+  if (g.hunting && g.rates && g.rates.xp && !g.modal && stale && now - adviceTry > 10 * 60000) {
+    adviceTry = now;
+    gameJs("localStorage.getItem('pk_dex_v1') && window.__huntAdvice ? window.__huntAdvice(true) : null").catch(() => {});
+  }
+
   // Personagem parado no Centro sem ter sido você: cura, repõe (só com a Recompra ligada) e volta para a última área.
   if (settings.auto.watchdog && idleSince && now - idleSince > 5 * 60000 && !settings.parked && settings.lastHunt && !g.modal) {
     idleSince = now;
@@ -339,7 +435,9 @@ async function watch(g) {
   }
 
   // Áreas novas liberadas (região aberta por nível): recalcula e, se ligado, testa a melhor.
-  if (g.unlocked != null && g.unlocked !== settings.unlocked) {
+  // O número só anda para a frente: logo depois de abrir o jogo a página pode estar com um mapa antigo guardado,
+  // e a leitura seguinte pareceria uma liberação.
+  if (g.unlocked != null && (settings.unlocked == null || g.unlocked > settings.unlocked)) {
     const before = settings.unlocked;
     settings.unlocked = g.unlocked;
     saveSettings();
@@ -506,7 +604,7 @@ function sendStatus() {
   if (!win || win.isDestroyed()) return;
   win.webContents.send(
     'status',
-    Object.assign(snapshot(), { history: history.slice(-150), settings, keep: cfg.keep, hours: cfg.restock.hours, restock: cfg.restock, kickHour: KICK_HOUR, kickSlots: KICK_SLOTS,
+    Object.assign(snapshot(), { history: history.slice(-150), settings, keep: cfg.keep, hours: cfg.restock.hours, restock: cfg.restock, kickHour: KICK_HOUR, kickSlots: KICK_SLOTS, limits: TUNABLE,
  kickRewards: KICK_REWARDS, market: cfg.market, areasCfg: cfg.areas, config: tunables(), version: app.getVersion() })
 
   );
@@ -535,6 +633,7 @@ function toggleHub(show) {
   if (!win) return;
   const visible = win.isVisible() && !win.isMinimized();
   if (show === undefined ? !visible : show) {
+    if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
   } else win.hide();
@@ -583,7 +682,10 @@ let perf = null;
 // A soma que o Electron informa por processo conta páginas compartilhadas e dá mais que o dobro.
 let privateMem = null;
 function measureMemory() {
-  const query = "(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter \"Name like 'electron%'\" | Measure-Object WorkingSetPrivate -Sum).Sum";
+  // Só os processos deste app (pelo PID): pelo nome entrariam outros programas feitos em Electron.
+  const pids = app.getAppMetrics().map((m) => m.pid).filter((p) => p > 0);
+  if (!pids.length) return;
+  const query = `$p=@(${pids.join(',')}); (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $p -contains $_.IDProcess } | Measure-Object WorkingSetPrivate -Sum).Sum`;
   execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', query], { windowsHide: true, timeout: 20000 }, (err, out) => {
     const n = parseInt(String(out).trim(), 10);
     if (err || !(n > 0)) return;
@@ -673,7 +775,7 @@ function createTab(kind, slug, url, title) {
     // as lives precisam continuar tocando escondidas, então ficam sem essa economia.
     webPreferences: { partition: PARTITION, backgroundThrottling: kind === 'game', contextIsolation: true, sandbox: true },
   });
-  const tab = { id, kind, slug, title: title || slug, view, state: null };
+  const tab = { id, kind, slug, title: title || slug, view, state: null, url, miss: 0, fails: 0 };
   tabs.set(id, tab);
   const wc = view.webContents;
   if (kind === 'twitch' || kind === 'kick') wc.setAudioMuted(true);
@@ -682,6 +784,11 @@ function createTab(kind, slug, url, title) {
     if (isUnwanted(url)) return { action: 'deny' };
     if (isGoogleLogin(url)) {
       explainGoogle();
+      return { action: 'deny' };
+    }
+    // Janela nova dentro do app só para os sites do jogo e das lives (login, vínculo de conta). O resto abre no navegador.
+    if (!isKnown(url)) {
+      if (/^https?:/i.test(url)) shell.openExternal(url);
       return { action: 'deny' };
     }
     return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: { partition: PARTITION } } };
@@ -696,11 +803,28 @@ function createTab(kind, slug, url, title) {
     child.webContents.on('will-redirect', guard);
   });
   wc.on('will-navigate', (e, url) => {
-    if (!isGoogleLogin(url)) return;
-    e.preventDefault();
-    explainGoogle();
+    if (isGoogleLogin(url)) {
+      e.preventDefault();
+      return explainGoogle();
+    }
+    // Um link que tiraria a aba dos sites conhecidos abre no navegador, e a aba fica onde está.
+    if (/^https?:/i.test(url) && !isKnown(url)) {
+      e.preventDefault();
+      shell.openExternal(url);
+    }
   });
-  wc.on('did-finish-load', () => inject(tab));
+  wc.setMaxListeners(40);
+  wc.on('did-finish-load', () => {
+    tab.fails = 0;
+    inject(tab);
+  });
+  // Sem rede na abertura a aba ficaria em branco para sempre: tenta de novo, cada vez com mais intervalo (até 2 min).
+  wc.on('did-fail-load', (_e, code, desc, failedUrl, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3: carga cancelada por outra navegação
+    const wait = Math.min(120000, 5000 * 2 ** tab.fails++);
+    log('carga falhou', tab.title, desc, 'nova tentativa em', wait / 1000, 's');
+    setTimeout(() => !wc.isDestroyed() && tabs.has(tab.id) && wc.loadURL(tab.url).catch(() => {}), wait);
+  });
   wc.on('render-process-gone', (_e, d) => {
     log('aba caiu', tab.title, d.reason);
     setTimeout(() => !wc.isDestroyed() && wc.reload(), 5000);
@@ -748,11 +872,21 @@ async function viaView(kind, expr) {
 async function isLive(kind, slug) {
   try {
     if (kind === 'kick') {
-      const r = await ses().fetch(`https://kick.com/api/v2/channels/${slug}`, { headers: { accept: 'application/json' } });
+      const r = await ses().fetch(`https://kick.com/api/v2/channels/${slug}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(12000) });
       if (r.ok) return !!(await r.json()).livestream;
       return await viaView('kick', `fetch('/api/v2/channels/${slug}').then(r=>r.ok?r.json():null).then(j=>j?!!j.livestream:null).catch(()=>null)`);
     }
-    const r = await ses().fetch(`https://www.twitch.tv/${slug}`);
+    const q = await ses().fetch('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: { 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: `query{user(login:"${slug}"){stream{id}}}` }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (q.ok) {
+      const j = await q.json();
+      if (j && j.data) return !!(j.data.user && j.data.user.stream);
+    }
+    const r = await ses().fetch(`https://www.twitch.tv/${slug}`, { signal: AbortSignal.timeout(12000) });
     if (r.ok) return (await r.text()).includes('isLiveBroadcast');
   } catch (e) {
     log('consulta falhou', kind, slug, e.message);
@@ -762,15 +896,62 @@ async function isLive(kind, slug) {
 
 // Verifica quais canais oficiais estão ao vivo; com o gerenciador ligado, abre os que entraram e fecha os que saíram.
 let polling = false;
+// --- Canais oficiais: a lista vem das janelas de bônus do próprio jogo ---
+// Lida a cada hora, e também quando o jogo avisa que há live oficial no ar que não está aberta.
+let roster = null;
+let rosterQuiet = 0;
+async function syncRoster(changes) {
+  const g = gameTab();
+  const st = g && g.state;
+  if (!st || !st.logged || st.modal || running || !onHost(g)) return;
+  const age = roster ? Date.now() - roster.at : Infinity;
+  // O aviso do jogo só adianta a leitura se da última vez havia mesmo live oficial sem aba aberta.
+  const hurry = st.twMore && settings.auto.lives && age > 4 * 60000 && Date.now() > rosterQuiet;
+  if (age < 60 * 60000 && !hurry) return;
+  const r = await gameJs('window.__officialLives ? window.__officialLives() : null').catch(() => null);
+  if (!r || !r.ok) return;
+  roster = r;
+  const missing = (r.twitch || []).some((c) => c.live && !findTab('twitch', c.slug) && !settings.closed.includes('twitch:' + c.slug));
+  if (!missing) rosterQuiet = Date.now() + 30 * 60000;
+  for (const kind of ['twitch', 'kick']) {
+    // Leitura curta demais é janela que não abriu direito: não mexe na lista.
+    if (!r[kind] || r[kind].length < 3) continue;
+    const slugs = r[kind].map((c) => c.slug);
+    const added = slugs.filter((s) => !cfg[kind].includes(s));
+    const gone = cfg[kind].filter((s) => !slugs.includes(s));
+    if (!added.length && !gone.length) continue;
+    cfg[kind] = slugs;
+    if (added.length) changes.push(`${kind}: ${added.join(', ')} entrou na lista oficial`);
+    if (gone.length) changes.push(`${kind}: ${gone.join(', ')} saiu da lista oficial`);
+  }
+  settings.roster = { twitch: cfg.twitch.slice(), kick: cfg.kick.slice() };
+  settings.kickPrefs = settings.kickPrefs.filter((s) => cfg.kick.includes(s));
+  saveSettings();
+}
+// Ao vivo segundo o jogo, enquanto a leitura é recente.
+const rosterLive = (kind, slug) => {
+  if (!roster || !roster[kind] || Date.now() - roster.at > 6 * 60000) return null;
+  const c = roster[kind].find((x) => x.slug === slug);
+  return c ? c.live : null;
+};
 async function poll() {
   if (polling || !win) return null;
   polling = true;
   const result = { at: new Date().toISOString(), twitch: {}, kick: {} };
   const changes = [];
   try {
+    await syncRoster(changes);
+    // Canal que saiu da lista oficial não rende bônus: a aba fecha.
+    if (settings.auto.lives) {
+      for (const t of streamTabs().filter((t) => !cfg[t.kind].includes(t.slug))) {
+        closeTab(t.id);
+        changes.push(`fechou ${t.kind}:${t.slug} (fora da lista oficial)`);
+      }
+    }
     for (const kind of ['twitch', 'kick']) {
-      for (const slug of cfg[kind]) {
-        const live = await isLive(kind, slug);
+      for (const slug of cfg[kind].slice()) {
+        // O jogo dizendo que está ao vivo vale mais que a consulta de fora, que às vezes erra para menos.
+        const live = rosterLive(kind, slug) === true ? true : await isLive(kind, slug);
         result[kind][slug] = live;
         const key = kind + ':' + slug;
         const tab = findTab(kind, slug);
@@ -785,17 +966,17 @@ async function poll() {
             changes.push('abriu ' + key);
           }
         } else if (live === false) {
+          // Duas leituras offline seguidas antes de agir, para uma consulta errada não mexer em nada.
+          const n = (offlineStrikes.get(key) || 0) + 1;
+          offlineStrikes.set(key, n);
+          if (n < 2) continue;
+          offlineStrikes.delete(key);
           // Canal que saiu do ar volta a ser aberto sozinho na próxima live.
           if (settings.closed.includes(key)) {
             settings.closed = settings.closed.filter((k) => k !== key);
             saveSettings();
           }
-          if (!tab || !settings.auto.lives) continue;
-          // Duas leituras offline seguidas antes de fechar, para não piscar.
-          const n = (offlineStrikes.get(key) || 0) + 1;
-          offlineStrikes.set(key, n);
-          if (n >= 2) {
-            offlineStrikes.delete(key);
+          if (tab && settings.auto.lives) {
             closeTab(tab.id);
             changes.push('fechou ' + key);
           }
@@ -857,7 +1038,7 @@ function liveSummary(r) {
 const KICK_SHEET = `(()=>{const b=[...document.querySelectorAll('button')].filter(b=>b.offsetParent&&b.querySelector('svg[data-ds-icon="Bubbles"]')&&/^\\d+([.,]\\d+)?( mil)?$/.test(b.innerText.trim()))[0];
   if(!b) return null; const open=/Pontos do canal/.test(document.body.innerText)&&[...document.querySelectorAll('button')].some(x=>x.offsetParent&&/XP PokeIdle/i.test(x.innerText));
   b.scrollIntoView({block:'center'}); const r=b.getBoundingClientRect(); return {open, pts:b.innerText.trim(), x:Math.round(r.left+r.width/2), y:Math.round(r.top+r.height/2)}})()`;
-const kickRedeemJs = (match) => `(async()=>{const sl=ms=>new Promise(r=>setTimeout(r,ms)); const vis=f=>[...document.querySelectorAll('button')].find(b=>b.offsetParent&&!b.disabled&&f(b.innerText.trim()));
+const kickRedeemJs = (match) => `(async()=>{const sl=ms=>new Promise(r=>setTimeout(r,ms)); const vis=f=>[...document.querySelectorAll('button')].find(b=>b.offsetParent&&!b.disabled&&!b.classList.contains('inline')&&f(b.innerText.trim()));
   const wait=async(f,ms)=>{const t=Date.now(); while(Date.now()-t<ms){const b=vis(f); if(b) return b; await sl(200);} return null};
   const rw=await wait(x=>/^\\d/.test(x)&&x.includes(${JSON.stringify(match)}),4000); if(!rw) return 'recompensa indisponível (pausada pelo canal ou lista não abriu)';
   rw.click(); const go=await wait(x=>x==='Resgatar',4000); if(!go) return 'botão Resgatar não apareceu (pontos insuficientes?)';
@@ -871,44 +1052,58 @@ async function kickRedeem(slug, count, reward) {
   let done = 0;
   let before = null;
   let back = null; // aba que estava na frente, se foi preciso trazer a live para o primeiro plano
-  for (let i = 0; i < count; i++) {
-    const s = await js(tab, KICK_SHEET);
-    if (!s) throw new Error('contador de pontos não encontrado (a Kick está logada?)');
-    if (before === null) before = s.pts;
-    if (!s.open) {
-      // O clique de verdade precisa da aba desenhada; ela volta a ficar invisível no fim.
-      forceVisible = tab.id;
-      layout();
-      await sleep(400);
-      await clickAt(wc, s.x, s.y);
-      await sleep(1300);
-      // No tamanho pequeno a lista às vezes não abre: repete com a aba em primeiro plano, no tamanho cheio.
-      let s2 = await js(tab, KICK_SHEET);
-      if (s2 && !s2.open) {
-        if (back === null) back = activeId;
-        select(tab.id);
-        await sleep(900);
-        s2 = await js(tab, KICK_SHEET);
+  try {
+    for (let i = 0; i < count; i++) {
+      const s = await js(tab, KICK_SHEET, 15000);
+      if (!s) throw new Error('contador de pontos não encontrado (a Kick está logada?)');
+      if (before === null) before = s.pts;
+      if (!s.open) {
+        // O clique de verdade precisa da aba desenhada; ela volta a ficar invisível no fim.
+        forceVisible = tab.id;
+        layout();
+        await sleep(400);
+        await clickAt(wc, s.x, s.y);
+        await sleep(1300);
+        // No tamanho pequeno a lista às vezes não abre: repete com a aba em primeiro plano, no tamanho cheio.
+        let s2 = await js(tab, KICK_SHEET, 15000);
         if (s2 && !s2.open) {
-          await clickAt(wc, s2.x, s2.y);
-          await sleep(1500);
+          if (back === null) back = activeId;
+          select(tab.id);
+          await sleep(900);
+          s2 = await js(tab, KICK_SHEET, 15000);
+          if (s2 && !s2.open) {
+            await clickAt(wc, s2.x, s2.y);
+            await sleep(1500);
+          }
         }
       }
+      const r = await js(tab, kickRedeemJs(R.match), 30000);
+      await pressKey(wc, 'Escape');
+      await sleep(700);
+      if (r !== 'ok') {
+        detail.push(`Resgate ${i + 1}: ${r}`);
+        break;
+      }
+      done++;
     }
-    const r = await js(tab, kickRedeemJs(R.match));
-    await pressKey(wc, 'Escape');
-    await sleep(700);
-    if (r !== 'ok') {
-      detail.push(`Resgate ${i + 1}: ${r}`);
-      break;
-    }
-    done++;
+    await sleep(1500);
+  } finally {
+    // Em qualquer desfecho as abas voltam ao lugar.
+    forceVisible = null;
+    if (back !== null && tabs.has(back)) select(back);
+    layout();
   }
-  await sleep(1500);
-  forceVisible = null;
-  if (back !== null && tabs.has(back)) select(back);
-  layout();
-  const after = await js(tab, KICK_SHEET);
+  const after = await js(tab, KICK_SHEET, 15000).catch(() => null);
+  // Vale o que a Kick descontou: clicar em "Resgatar" não prova que o resgate foi aceito.
+  const b = before ? parsePoints(before) : null;
+  const a = after ? parsePoints(after.pts) : null;
+  if (b != null && a != null) {
+    const real = Math.max(0, Math.floor((b - a) / R.cost + 0.01));
+    if (real < done) {
+      detail.push(`A Kick descontou pontos de ${real} resgate(s), não de ${done}: o restante não foi aceito.`);
+      done = real;
+    }
+  }
   detail.unshift(`Canal ${slug}: ${done} de ${count} resgates de ${R.label} feitos`, `Pontos: ${before} → ${after ? after.pts : '?'}`, 'O jogo credita as horas em até um minuto.');
   return { ok: done === count, done, detail };
 }
@@ -919,24 +1114,26 @@ async function autoKick() {
   const ch = channels().find((c) => c.kind === 'kick' && c.open && c.hours >= 1 && c.pts < 100000 && !(kickFail.get(c.slug) > Date.now()));
   if (!ch) return;
   running = 'Resgate automático na Kick';
+  let ok = false;
   try {
     const r = await kickRedeem(ch.slug, 1);
+    ok = r.ok;
     record({ title: `Kick: resgate automático de 1 h de +15% XP em ${ch.slug}`, ok: r.ok, detail: r.detail });
-    // Recompensa pausada ou lista que não abriu: o canal espera 30 min. Só 4 falhas seguidas desligam a automação.
-    if (r.ok) kickFails = 0;
-    else {
-      kickFail.set(ch.slug, Date.now() + 30 * 60000);
-      if (++kickFails >= 4) {
-        kickFails = 0;
-        settings.auto.kick = false;
-        saveSettings();
-        record({ title: 'Kick: resgate automático desligado após 4 falhas seguidas', ok: false, detail: ['Religue no painel quando quiser tentar de novo.'] });
-      }
-    }
   } catch (e) {
-    record({ title: 'Kick: resgate automático falhou', ok: false, detail: [e.message] });
+    record({ title: `Kick: resgate automático em ${ch.slug} falhou`, ok: false, detail: [e.message] });
   } finally {
     running = null;
+  }
+  // Qualquer falha (recompensa pausada, lista que não abriu, erro): o canal espera 30 min. Só 4 seguidas desligam a automação.
+  if (ok) kickFails = 0;
+  else {
+    kickFail.set(ch.slug, Date.now() + 30 * 60000);
+    if (++kickFails >= 4) {
+      kickFails = 0;
+      settings.auto.kick = false;
+      saveSettings();
+      record({ title: 'Kick: resgate automático desligado após 4 falhas seguidas', ok: false, detail: ['Religue no painel quando quiser tentar de novo.'] });
+    }
   }
 }
 
@@ -1050,6 +1247,11 @@ const DEPOT_RESULT = {
   vazio: 'Depot vazio, nada a fazer',
   'só guardados': 'Depot revisado: tudo o que havia foi para a Coleção',
   skip: 'Não rodou: há uma janela aberta no jogo ou outra automação em andamento',
+  pendente: 'Parou sem vender: ficou no Depot uma carta que deveria ir para a Coleção, ou o jogo não confirmou um passo (veja a entrada do jogo logo acima)',
+  'ilegível': 'Parou sem vender: havia uma carta que o app não conseguiu ler',
+  'sem botão': 'Parou sem vender: o botão de enviar à Coleção não foi encontrado',
+  guardados: 'O que batia a regra foi para a Coleção; nada foi vendido',
+  erro: 'A revisão do Depot deu erro (veja a entrada do jogo logo acima)',
 };
 
 // Cada ação: título e explicação mostrados nas duas confirmações, e o que ela faz.
@@ -1093,9 +1295,15 @@ const ACTIONS = {
   },
   centro: {
     title: () => 'Ir para o Centro Pokémon',
-    detail: () => 'Interrompe a caça atual. O personagem fica parado no Centro até você escolher outra área.',
+    detail: () => 'Interrompe a caça atual. O personagem fica parado no Centro até você escolher outra área. Se o dano não der trégua por 45 s, a saída é desistindo do combate, que custa 10% do XP do nível.',
     run: async () => {
-      const c = await gameJs('window.__gotoCentro()');
+      await gameJs('window.__pkHold(true)');
+      let c;
+      try {
+        c = await gameJs('window.__gotoCentro()');
+      } finally {
+        await gameJs('window.__pkHold(false)').catch(() => {});
+      }
       // Marca que a parada foi pedida, para a proteção não levar o personagem de volta.
       if (c.ok) {
         settings.parked = true;
@@ -1175,6 +1383,8 @@ const ACTIONS = {
       if (!c.ok) return { ok: false, detail: ['Não consegui ir ao Centro: ' + (c.why || 'tempo esgotado')] };
       const r = await gameJs('window.__teamBest()');
       detail.push(...(r.ok ? (r.changed.length ? r.changed : [r.why]) : ['Falha: ' + r.why]));
+      // Quem saiu da equipe e não foi para a Coleção fica no Depot, onde a revisão automática pode vender.
+      if (r.ok && r.changed.some((x) => /ATENÇÃO/.test(x))) r.ok = false;
       if (back) {
         const h = await goHunt(back);
         detail.push(...h.detail);
@@ -1254,7 +1464,7 @@ const ACTIONS = {
 // O que cada automação faz, para as duas confirmações ao ligar.
 const AUTO_INFO = {
   watchdog: ['Ligar a proteção contra parada', 'Se o personagem ficar 5 minutos parado no Centro sem você ter pedido, o app cura a equipe e volta sozinho para a última área. Ele só repõe o estoque se a Recompra automática estiver ligada.'],
-  guard: ['Ligar a proteção das automações do jogo', 'A cada minuto o app confere e religa o lançamento automático de bolas, o uso de poções, o revive e a volta à caça, e troca a bola ou poção selecionada se ela acabar.'],
+  guard: ['Ligar a proteção das automações do jogo', 'A cada minuto o app confere as automações do próprio jogo (bolas, poções, revive e volta à caça). Ele religa só as que já viu ligadas na sua conta e troca a bola ou poção selecionada se ela acabar; o que você nunca ligou continua desligado.'],
   bestArea: ['Ligar a melhor área automática', 'Quando uma região nova é liberada, o app calcula as áreas, testa a melhor candidata por alguns minutos e fica nela só se o XP por hora medido for maior. Cada teste para a caça por cerca de dois minutos.'],
   passe: ['Ligar o resgate automático do Passe', 'O app resgata a recompensa grátis do Passe assim que ela libera. Não compra nada.'],
   stones: ['Ligar a venda automática de pedras', 'De hora em hora o app anuncia no Mercado da Comunidade as pedras que sobram na bolsa, 1 Coin abaixo do menor preço.'],
@@ -1308,6 +1518,11 @@ async function runAction(name, args) {
     return;
   }
   if (A.confirm !== false && !(await confirmOnce('acao:' + name, A.title(args), A.detail(args)))) return;
+  // Uma automação pode ter começado enquanto as confirmações estavam abertas.
+  if (running) {
+    dialog.showMessageBox(win, { type: 'info', title: 'Aguarde', message: 'Outra ação começou enquanto você confirmava:', detail: running + '\n\nTente de novo quando ela terminar.', buttons: ['OK'] });
+    return;
+  }
   await execute(name, args, null, 'app');
   collect();
 }
@@ -1336,10 +1551,16 @@ const TRACKERS = [
 
 function createWindow() {
   ses().webRequest.onBeforeRequest({ urls: TRACKERS }, (_d, cb) => cb({ cancel: true }));
+  // Sem isso o Electron aprova qualquer pedido de permissão (câmera, microfone, local, notificações) dos sites abertos.
+  const ALLOWED = ['fullscreen', 'clipboard-sanitized-write', 'pointerLock'];
+  ses().setPermissionRequestHandler((_wc, permission, cb) => cb(ALLOWED.includes(permission)));
+  ses().setPermissionCheckHandler((_wc, permission) => ALLOWED.includes(permission));
 
   win = new BrowserWindow({
     width: 1680,
     height: 940,
+    minWidth: 980,
+    minHeight: 620,
     title: 'PokéIdle Desk',
     icon: path.join(ROOT, 'icon.png'),
     backgroundColor: '#17151c',
@@ -1456,9 +1677,11 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => {
     if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
+    toggleHub(true);
   });
-  app.on('before-quit', () => (quitting = true));
+  app.on('before-quit', () => {
+    quitting = true;
+    flushJson();
+  });
   app.whenReady().then(createWindow);
 }

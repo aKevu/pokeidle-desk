@@ -80,12 +80,13 @@
   window.__rd = () => {
     const t = sheet();
     const m = t.match(/Nv (\d+) \| ([\d.]+) \/ ([\d.]+) xp \| ([\d.]+)/);
-    const c = t.match(/EM CAMPO \| ([\w ]+) Nv (\d+).*?\| (\d+) \/ (\d+) \| ([\d.]+) \/ ([\d.]+) xp/);
+    // O nome aceita qualquer caractere (Mr. Mime, Farfetch'd, Ho-Oh…).
+    const c = t.match(/EM CAMPO \| ([^|]+?) Nv (\d+).*?\| (\d+) \/ (\d+) \| ([\d.]+) \/ ([\d.]+) xp/);
     return {
       lv: +m[1],
       xp: num(m[2]),
       gold: num(m[4]),
-      poke: c ? c[1] + c[2] + ' hp' + c[3] + '/' + c[4] : '?',
+      poke: c ? `${c[1].trim()} Nv ${c[2]} · HP ${fmt(+c[3])}/${fmt(+c[4])}` : '?',
       pokeName: c ? c[1].trim() : null,
       pokeLv: c ? +c[2] : 0,
       pxp: c ? num(c[5]) : 0,
@@ -93,22 +94,39 @@
       balls: window.__ballsN(),
     };
   };
+  // Estoque lido das fichas do painel de automações: cada ficha traz o nome do item no título e a quantidade no texto.
+  // Quantidade ilegível vale -1 ("não sei"), nunca 0: com 0 a recompra compraria sem parar.
+  const chips = (re) => {
+    const list = [...document.querySelectorAll('.auto-chip')].filter((c) => re.test(c.title || ''));
+    if (!list.length) return -1;
+    let sum = 0;
+    for (const c of list) {
+      const t = c.innerText.trim();
+      if (!/^[\d.]+$/.test(t)) return -1;
+      sum += num(t);
+    }
+    return sum;
+  };
   window.__stock = () => {
+    const rev = chips(/Revive/);
+    const pot = chips(/Potion/);
+    if (rev >= 0 && pot >= 0) return { rev, pot };
+    // Sem as fichas (tela diferente): leitura antiga, pelo texto do painel.
     const s = sheet();
     const seg = s.slice(s.indexOf('AUTOMAÇÕES')).slice(0, 320);
     const rv = seg.match(/desmaiar \| ([\d.]+) \| ([\d.]+)/);
     const pt = seg.match(/\d+% \| ([\d.]+) \| ([\d.]+) \| ([\d.]+) \| ([\d.]+) \| ([\d.]+) \| ([\d.]+)/);
     return {
-      rev: rv ? num(rv[1]) + num(rv[2]) : -1,
-      pot: pt ? pt.slice(1).reduce((a, b) => a + num(b), 0) : -1,
+      rev: rev >= 0 ? rev : rv ? num(rv[1]) + num(rv[2]) : -1,
+      pot: pot >= 0 ? pot : pt ? pt.slice(1).reduce((a, b) => a + num(b), 0) : -1,
     };
   };
   window.__ballsN = () => {
-    const b = document.querySelector('#caidos-bolas .caidos-bola');
-    if (b) return +b.title.replace(/\D/g, '');
-    const s = sheet();
-    const m = s.slice(s.indexOf('AUTOMAÇÕES')).slice(0, 140).match(/VIP \| ([\d.]+) \| ([\d.]+) \| ([\d.]+) \| ([\d.]+) \| ([\d.]+)/);
-    return m ? num(m[4]) : -1;
+    const n = chips(/^Ultra Ball/);
+    if (n >= 0) return n;
+    const b = [...document.querySelectorAll('#caidos-bolas .caidos-bola')].find((x) => /^Ultra Ball/.test(x.title || ''));
+    const d = b ? b.title.replace(/\D/g, '') : '';
+    return d ? +d : -1;
   };
 
   window.__buy = async (cat, name, qty) => {
@@ -232,9 +250,12 @@
   };
   setTimeout(checkCompat, 5000);
 
+  // Depois de uma compra que o jogo não confirmou, a recompra automática espera antes de tentar de novo.
+  let restockHold = 0;
   window.__restockCheck = async (force) => {
     if (window.__pkBlocked) return 'bloqueado: ' + window.__pkBlocked;
     if (busy || window.__top()) return 'skip';
+    if (!force && Date.now() < restockHold) return 'nada';
     let st, rd;
     try {
       st = window.__stock();
@@ -247,9 +268,12 @@
     // ponto em que ela cura mais por Coin e com menos usos.
     const pot = rd.maxHp >= 10000 ? ['Golden Potion', 2500] : rd.maxHp * 0.7 >= 3000 ? ['Ultimate Potion', 1500] : ['Hyper Potion', 800];
     let gold = rd.gold;
-    const can = (unit, q) => Math.max(0, Math.min(q, Math.floor((gold - CFG.reserve) / unit)));
+    const floor = Number(CFG.reserve) || 0;
+    const can = (unit, q) => Math.max(0, Math.min(q, Math.floor((gold - floor) / unit)));
+    const have = (n) => (n === 'Ultra Ball' ? window.__ballsN() : n === 'Revive' ? window.__stock().rev : window.__stock().pot);
     const plans = [
-      ['Poções', pot[0], pot[1], force ? top(st.pot, CFG.potBuy, r.pot, CFG.potMax) : want(st.pot, CFG.potMin, CFG.potBuy, r.pot, CFG.potMax)],
+      // Sem ler o pokémon em campo não dá para escolher a poção: fica para a próxima rodada.
+      ['Poções', pot[0], pot[1], !rd.maxHp ? 0 : force ? top(st.pot, CFG.potBuy, r.pot, CFG.potMax) : want(st.pot, CFG.potMin, CFG.potBuy, r.pot, CFG.potMax)],
       ['Revives', 'Revive', 600, force ? top(st.rev, CFG.revBuy, 0, CFG.revMax) : want(st.rev, CFG.revMin, CFG.revBuy, 0, CFG.revMax)],
       ['Pokébolas', 'Ultra Ball', 130, force ? top(rd.balls, CFG.ballBuy, r.balls, CFG.ballMax) : want(rd.balls, CFG.ballMin, CFG.ballBuy, r.balls, CFG.ballMax)],
     ];
@@ -258,9 +282,15 @@
     try {
       for (const [cat, name, unit, q0] of plans) {
         const q = can(unit, q0);
-        if (q <= 0) continue;
-        const ok = (await window.__buy(cat, name, q)) === 'ok';
-        const did = ok ? `Comprado: ${fmt(q)} ${name}` : `Compra falhou: ${name}`;
+        if (!(q > 0)) continue;
+        const before = have(name);
+        const clicked = (await window.__buy(cat, name, q)) === 'ok';
+        await sl(700);
+        const after = have(name);
+        // A compra só vale se o estoque subiu. Sem isso o jogo recusou (ou a tela mudou) e insistir só gastaria Coins às cegas.
+        const ok = clicked && before >= 0 && after >= before + Math.floor(q * 0.9);
+        if (!ok) restockHold = Date.now() + 30 * 60000;
+        const did = ok ? `Comprado: ${fmt(q)} ${name}` : `Compra não confirmada: ${name} (estoque ${before} → ${after}); a recompra automática espera 30 min`;
         if (ok) gold -= q * unit;
         note(did, [
           `${fmt(q)} × ${fmt(unit)} = ${fmt(q * unit)} Coins`,
@@ -268,8 +298,8 @@
           `Consumo medido: ${r.pot ?? '–'} poções/h, ${r.balls ?? '–'} Ultra Balls/h`,
         ]);
         done.push(did);
-        // No automático basta uma compra por rodada; a próxima checagem cuida do resto.
-        if (!force) break;
+        // No automático basta uma compra por rodada; a próxima checagem cuida do resto. Compra não confirmada encerra a rodada.
+        if (!force || !ok) break;
       }
     } catch (e) {
       done.push('Erro na recompra: ' + e.message);
@@ -358,47 +388,78 @@
         note('Depot: carta ilegível, nada vendido');
         return 'ilegível';
       }
-      for (let i = 0; i < 40; i++) {
+      const cardKey = (c) => c.dataset.chave || '';
+      const byKey = (k) => depotCards().find((c) => cardKey(c) === k);
+      // Vender e enviar à Coleção tiram a carta do Depot: espera até 3 s para ver se ela saiu mesmo.
+      const gone = async (k) => {
+        for (let t = 0; t < 15; t++) {
+          if (!byKey(k)) return true;
+          await sl(200);
+        }
+        return false;
+      };
+      for (let i = 0; i < 80; i++) {
         // Primeiro os que batem a regra; depois, entre os candidatos a reserva, o de maior nota.
         const pool = depotCards().filter((c) => parseCard(c));
         const c = pool.find((c) => keeper(parseCard(c))) || pool.filter((c) => reserve(parseCard(c))).sort((a, b) => parseCard(b).n - parseCard(a).n)[0];
         if (!c) break;
         const d = parseCard(c);
-        col[d.name] = (col[d.name] || 0) + 1;
-        const b = [...c.querySelectorAll('button')].find((b) => /Coleção/.test(b.title || ''));
+        const b = c.querySelector('button.mk-colecao') || [...c.querySelectorAll('button')].find((b) => /Coleção/.test(b.title || ''));
         if (!b) {
           note('Depot: botão da Coleção não encontrado, nada vendido');
           return 'sem botão';
         }
+        const k = cardKey(c);
         b.click();
+        // Só conta como guardado se a carta saiu do Depot (Coleção cheia ou clique perdido deixam a carta lá).
+        if (!k || !(await gone(k))) {
+          note('Depot: a carta não foi para a Coleção, nada vendido', [line(d)]);
+          return 'pendente';
+        }
+        col[d.name] = (col[d.name] || 0) + 1;
         stats.kept++;
         const why = [d.shiny && 'shiny', d.p >= KEEP.potencia && 'potência', d.q >= KEEP.qualidade && 'qualidade', d.n >= KEEP.nota && 'nota', !keeper(d) && `reserva da espécie (${col[d.name]} de ${KEEP.reservas})`];
         note(`Guardado na Coleção: ${d.name} Nv ${d.lv}`, [line(d), 'Motivo: ' + why.filter(Boolean).join(', '), `Valeria ${fmt(d.price)} no NPC`]);
-        await sl(1200);
+        await sl(300);
       }
       cards = depotCards();
       if (!cards.length) return 'só guardados';
-      if (onlyKeep) return 'guardados';
-
+      // Vale também antes da Oferenda: com carta de guardar ainda no Depot, nada segue adiante.
       if (cards.some((c) => !parseCard(c) || keep2(parseCard(c)))) {
         note('Depot: sobrou carta para guardar, nada vendido');
         return 'pendente';
       }
-      // Lido antes da venda: depois dela as cartas saem da tela e não dá mais para ler.
-      const sold = cards.map(parseCard).sort((a, b) => b.price - a.price);
-      const g0 = window.__rd().gold;
-      window.__any('Vender todo o Depot');
-      await sl(1500);
-      if (!/VENDER TODO O DEPOT/.test(window.__mtxt(0, 200))) {
-        note('Depot: confirmação de venda não apareceu');
-        return 'sem confirmação';
+      if (onlyKeep) return 'guardados';
+
+      // Venda carta a carta, só das que foram lidas e conferidas agora. O botão "Vender todo o Depot" venderia também
+      // uma captura que caísse no Depot durante a revisão, sem ela ter passado pela regra.
+      const plan = cards.map((c) => ({ k: cardKey(c), d: parseCard(c) }));
+      if (plan.some((x) => !x.k)) {
+        note('Depot: carta sem identificação, nada vendido');
+        return 'ilegível';
       }
-      window.__any('Confirmar');
-      await sl(2500);
-      const gain = Math.max(0, window.__rd().gold - g0);
-      stats.sold += cards.length;
+      const sold = [];
+      for (const { k, d } of plan) {
+        const c = byKey(k);
+        if (!c) continue;
+        // Relida no instante da venda: se mudou ou passou a bater a regra, fica.
+        const now = parseCard(c);
+        if (!now || now.name !== d.name || now.price !== d.price || keep2(now)) continue;
+        const sell = c.querySelector('button.mk-acao');
+        if (!sell || sell.textContent.trim() !== 'Vender') break;
+        sell.click();
+        if (!(await gone(k))) {
+          note('Depot: o jogo não confirmou a venda de uma carta, parei', [line(d)]);
+          break;
+        }
+        sold.push(d);
+      }
+      if (!sold.length) return 'pendente';
+      sold.sort((a, b) => b.price - a.price);
+      const gain = sold.reduce((n, d) => n + d.price, 0);
+      stats.sold += sold.length;
       stats.soldGold += gain;
-      note(`Vendidos ${cards.length} do Depot por ${fmt(gain)}`, [
+      note(`Vendidos ${sold.length} do Depot por ${fmt(gain)}`, [
         `Nenhum era shiny, P${KEEP.potencia}+, qualidade ${br(KEEP.qualidade)}+ ou nota ${br(KEEP.nota)}+`,
         ...sold.map((d) => `${line(d)} — ${fmt(d.price)}`),
       ]);
@@ -732,7 +793,8 @@
       window.__pkAdvice = JSON.parse(localStorage.getItem(ADVICE_KEY) || 'null');
     } catch (e) {}
   }
-  window.__huntAdvice = async () => {
+  // quiet: recálculo automático, sem entrada no registro.
+  window.__huntAdvice = async (quiet) => {
     let rd;
     try {
       rd = window.__rd();
@@ -742,7 +804,8 @@
     const r = rates();
     if (!hunting()) return { ok: false, why: 'fora de uma caça: preciso do ritmo atual para calibrar a estimativa' };
     if (!r.xp) return { ok: false, why: 'ainda medindo o ritmo da caça (leva uns 3 minutos)' };
-    const kill = [...document.body.innerText.matchAll(/derrotado! \+([\d.]+) xp treinador/g)].pop();
+    // Só o registro da caça: o chat também é texto da página, e é escrito por outros jogadores.
+    const kill = [...((document.getElementById('hud-log') || {}).innerText || '').matchAll(/derrotado! \+([\d.]+) xp treinador/g)].pop();
     if (!kill) return { ok: false, why: 'não achei o XP por abate no registro do jogo' };
     const xpKill = num(kill[1]);
     const dex = await window.__dexLoad();
@@ -807,6 +870,7 @@
     try {
       localStorage.setItem(ADVICE_KEY, JSON.stringify(res));
     } catch (e) {}
+    if (quiet) return res;
     note(
       `Áreas calculadas: melhor estimativa é ${top[0].name} Nv ${top[0].lv}`,
       [`Base: ${res.base.name} Nv ${res.base.lv}, ${fmt(r.xp)} XP/h medidos com ${res.me}`].concat(
@@ -895,10 +959,12 @@
 
       area: huntSlug(),
       unlocked: window.__pkMap ? window.__pkMap.marks.filter((m) => !m.locked).length : null,
-      version: (document.body.innerText.match(/\bv\d+\.\d+\.\d+\b/g) || []).pop() || null,
+      // Lida do rodapé do jogo, não da página inteira: o chat é texto de outros jogadores.
+      version: ((document.getElementById('versao') || {}).innerText || '').trim().match(/^v\d+\.\d+\.\d+$/) ? document.getElementById('versao').innerText.trim() : null,
       extra: window.__pkExtra ? window.__pkExtra() : null,
       pvp: pvpNow(),
       twitch: tw ? tw[1] + '%' : null,
+      twMore: !!document.querySelector('.tr-ativo.twitch.tw-tem-mais'),
       kick: buffs.kick,
       kickAt: buffs.kickAt,
       stats,

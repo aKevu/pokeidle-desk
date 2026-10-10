@@ -60,9 +60,22 @@
   // --- Proteção das automações do próprio jogo (bola, poção, revive, volta à caça) ---
   window.__guard = async () => {
     const fixes = [];
+    // Só religa o que já viu ligado nesta conta: quem deixa o lançamento de bolas desligado de propósito não tem a escolha desfeita.
+    let seen = [];
+    try {
+      seen = JSON.parse(localStorage.getItem('pk_guard_v1') || '[]');
+    } catch (e) {}
+    const mark = (id) => {
+      if (seen.includes(id)) return;
+      seen.push(id);
+      try {
+        localStorage.setItem('pk_guard_v1', JSON.stringify(seen));
+      } catch (e) {}
+    };
     const tick = async (id, label) => {
       const c = document.getElementById(id);
-      if (c && !c.checked) {
+      if (c && c.checked) mark(id);
+      if (c && !c.checked && seen.includes(id)) {
         c.click();
         await sl(500);
         if (c.checked) fixes.push(label + ' religado');
@@ -79,7 +92,8 @@
       fixes.push(`${label}: selecionada ${pick.title.split(' —')[0].split('\n')[0]}`);
     };
     // Sem uma bola com estoque marcada, o jogo desliga o lançamento sozinho.
-    await ensure(/Ball — /, 'Ultra Ball', 'Bola do lançamento automático');
+    const ballOn = document.getElementById('auto-ball-sem-parar');
+    if ((ballOn && ballOn.checked) || seen.includes('auto-ball-sem-parar')) await ensure(/Ball — /, 'Ultra Ball', 'Bola do lançamento automático');
     await ensure(/Potion/, 'Hyper Potion', 'Poção automática');
     await ensure(/Revive/, 'Revive', 'Revive automático');
     await tick('auto-ball-sem-parar', 'Lançamento automático de bolas');
@@ -156,7 +170,7 @@
       const q = ((r.querySelector('.cmv-qtd') || {}).textContent || '').match(/([\d.]+)×/);
       return { seller: ((r.querySelector('.cmv-quem') || {}).textContent || '').trim(), qty: q ? num(q[1]) : 1, price: money(r.querySelector('.cmv-preco .cm-preco')), mine: !r.querySelector('.cmv-dm'), buy };
     });
-    return { avg7: a ? num(a[1]) : null, sold7: a ? num(a[2]) : null, rows: rows.filter((r) => r.price > 0) };
+    return { avg7: a ? num(a[1]) : null, sold7: a ? num(a[2]) : null, rows: rows.filter((r) => r.price > 0).sort((x, y) => x.price - y.price) };
   };
   const openPanel = async (name) => {
     await openItems(name);
@@ -192,6 +206,11 @@
     const f = folha();
     if (!f) return { ok: false, why: 'a janela de compra não abriu' };
     const qi = vis('input', f).find((i) => i.type === 'number' || i.inputMode === 'numeric');
+    // Sem campo de quantidade a confirmação levaria o lote inteiro, acima do planejado: não compra.
+    if (!qi && n < row.qty) {
+      await closeEverything();
+      return { ok: false, why: `não achei o campo de quantidade para comprar ${n} de um lote de ${row.qty}` };
+    }
     if (qi && row.qty > 1) {
       setVal(qi, n);
       await sl(500);
@@ -282,6 +301,12 @@
         }
         const qty = s.qty - MK.keepStones;
         const price = Math.max(1, others[0].price - 1);
+        // Um anúncio isolado muito abaixo do mercado não serve de referência: vender o estoque todo por ele seria prejuízo.
+        const ref = p.avg7 || others[Math.min(2, others.length - 1)].price;
+        if (price < ref * 0.6) {
+          skipped.push(`${s.name}: o menor anúncio (${fmt(others[0].price)}) está muito abaixo da referência (${fmt(ref)}); não anunciei`);
+          continue;
+        }
         const r = await list(s.name, price, qty);
         await closeEverything();
         // Confere na bolsa se as pedras saíram mesmo; sem isso o anúncio não foi aceito.
@@ -308,12 +333,15 @@
 
   // Oportunidade de flip num item: comprar os anúncios mais baratos e reanunciar logo abaixo do degrau seguinte.
   const flipOf = (name, p, budget) => {
+    // O jogo aceita um anúncio por item: com um seu no ar, o que fosse comprado não poderia ser reanunciado.
+    if (p.rows.some((r) => r.mine)) return null;
     const rows = p.rows.filter((r) => !r.mine);
     let best = null;
     let cost = 0;
     let units = 0;
     for (let k = 0; k < Math.min(rows.length - 1, 6); k++) {
       if (!rows[k].buy) break; // oferta retida: ainda não dá para comprar
+      if (p.avg7 && rows[k].price > p.avg7) break; // acima da média vendida na semana não é pechincha
       const can = Math.min(rows[k].qty, Math.floor((budget - cost) / rows[k].price));
       if (can <= 0) break;
       cost += can * rows[k].price;
@@ -365,10 +393,11 @@
   // Executa um flip: confere se a oportunidade ainda existe, compra e reanuncia.
   window.__flipRun = (o) =>
     locked(async () => {
-      const cap = Math.min(MK.flipBudget, Math.max(0, window.__rd().gold - P.CFG.reserve));
+      // Nunca gasta mais do que a oportunidade que foi mostrada e confirmada, nem paga mais caro por unidade.
+      const cap = Math.min(MK.flipBudget, o.cost > 0 ? o.cost : Infinity, Math.max(0, window.__rd().gold - (Number(P.CFG.reserve) || 0)));
       const now = flipOf(o.name, await openPanel(o.name), cap);
       await closeEverything();
-      if (!now || now.margin < MK.flipMargin || now.profit < MK.flipMinProfit) return { ok: false, why: 'a oportunidade não existe mais (os preços mudaram)' };
+      if (!now || !now.liquid || now.margin < MK.flipMargin || now.profit < MK.flipMinProfit || (o.buyMax > 0 && now.buyMax > o.buyMax)) return { ok: false, why: 'a oportunidade não existe mais (os preços mudaram, há um anúncio seu desse item, ou ele parou de girar)' };
       let bought = 0;
       let spent = 0;
       const steps = [];
@@ -391,6 +420,15 @@
       const price = Math.max(floor, after[0] ? after[0].price - 1 : now.resale);
       const l = await list(o.name, price, bought);
       await closeEverything();
+      // O anúncio só vale se aparecer no painel do item como seu.
+      if (l.ok) {
+        const seen = (await openPanel(o.name)).rows.some((r) => r.mine);
+        await closeEverything();
+        if (!seen) {
+          l.ok = false;
+          l.why = 'o jogo não mostrou o anúncio no ar: os itens comprados ficaram na bolsa';
+        }
+      }
       const profit = Math.round(bought * price * (1 - MK.fee) - spent);
       note(`Flip: ${bought}× ${o.name} comprado por ${fmt(spent)} e ${l.ok ? 'anunciado a ' + fmt(price) : 'NÃO anunciado'}`, steps.concat([`Lucro se vender tudo: ${fmt(profit)}`, l.ok ? l.summary : 'Anúncio falhou: ' + l.why]));
       return { ok: l.ok, bought, spent, price, profit, why: l.ok ? null : l.why };
@@ -553,6 +591,34 @@
   let lastStones = 0;
   let lastFlip = 0;
   let lastScanLv = window.__pkMap ? window.__pkMap.lv : 0;
+  // --- Canais oficiais: a lista e quem está ao vivo saem das janelas de bônus do próprio jogo ---
+  // (clicar na linha "Bônus Twitch" ou "Bônus na Kick" do painel do treinador abre a lista).
+  window.__officialLives = () =>
+    locked(async () => {
+      const out = { ok: true, at: Date.now(), twitch: null, kick: null };
+      for (const [kind, sel, host] of [['twitch', '.tw-canal', 'twitch.tv/'], ['kick', '.kk-canal', 'kick.com/']]) {
+        const line = document.querySelector('.tr-ativo.' + kind);
+        if (!line || !line.offsetParent) continue;
+        line.click();
+        await sl(1600);
+        const m = window.__top();
+        if (m) {
+          const list = [];
+          for (const c of m.querySelectorAll(sel)) {
+            const a = c.matches('a[href]') ? c : c.querySelector('a[href]');
+            const href = a ? a.getAttribute('href') : '';
+            const i = href.indexOf(host);
+            const slug = i < 0 ? '' : href.slice(i + host.length).split(/[/?#]/)[0].toLowerCase();
+            if (/^[a-z0-9_]{2,30}$/.test(slug) && !list.some((x) => x.slug === slug)) list.push({ slug, live: c.classList.contains('ao-vivo') });
+          }
+          out[kind] = list;
+        }
+        await P.closeAll();
+        await sl(400);
+      }
+      return out;
+    });
+
   // --- PvP Ranqueado: a fila automática é do próprio jogo (VIP). O app só confere se ela continua ligada ---
   // e religa quando cai (o jogo a desliga numa recarga da página ou quando alguém cancela a busca).
   const pvp = { last: 0, offSince: 0, info: null };

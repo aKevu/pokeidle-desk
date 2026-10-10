@@ -62,5 +62,6 @@
   },
   "maxTwitch": 10,
   "maxKick": 2,
+  "kickQuality": 160,
   "gameFps": 24
 }
