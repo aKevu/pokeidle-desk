@@ -107,15 +107,37 @@ function renderNav(s) {
 
 // XP acumulado do treinador até o início do nível L.
 const xpTotal = (lv) => (50 / 3) * (lv ** 3 - 6 * lv ** 2 + 17 * lv - 12);
-// Metas da previsão: os próximos múltiplos de 50, sem teto, mais a próxima região do Mapa se ela ficar além deles.
+// Metas da previsão: as próximas da sequência (o passo cresce com o nível), mais as regiões do Mapa que ainda faltam abrir.
 const REGIONS = [[150, 'Outland'], [500, 'Hoenn'], [1000, 'Sinnoh'], [5000, 'Unova'], [10000, 'Kalos'], [25000, 'Alola']];
-// Sem teto: passado o nível da última região, seguem só os múltiplos de 50.
+// Passo da sequência: de 50 em 50 até o Nv 1.000, de 100 em 100 até 5.000, de 500 em 500 até 10.000 e de 1.000 em 1.000
+// daí em diante, sem teto (Alola abre no 25.000 e tem áreas que pedem bem mais).
+const stepAt = (lv) => (lv < 1000 ? 50 : lv < 5000 ? 100 : lv < 10000 ? 500 : 1000);
 const levelTargets = (lv) => {
-  const first = (Math.floor(lv / 50) + 1) * 50;
-  const out = [0, 1, 2, 3].map((i) => first + i * 50);
+  const out = [];
+  let cur = lv;
+  for (let i = 0; i < 5; i++) {
+    const st = stepAt(cur);
+    cur = (Math.floor(cur / st) + 1) * st;
+    out.push(cur);
+  }
   for (const [l] of REGIONS) if (l > lv && !out.includes(l)) out.push(l);
   return out.sort((a, b) => a - b);
 };
+// A sequência inteira até a última região (ou as próximas 15, para quem já passou dela).
+const levelLadder = (lv) => {
+  const out = [];
+  let cur = lv;
+  for (let i = 0; i < 400 && (cur < 25000 || out.length < 15); i++) {
+    const st = stepAt(cur);
+    cur = (Math.floor(cur / st) + 1) * st;
+    out.push(cur);
+  }
+  return out;
+};
+let ladderOpen = false;
+try {
+  ladderOpen = localStorage.getItem('pk_ladder') === '1';
+} catch (e) {}
 const regionAt = (lv) => (REGIONS.find(([l]) => l === lv) || [])[1];
 function eta(hours) {
   if (!isFinite(hours)) return '–';
@@ -210,7 +232,7 @@ function pageResumo(s) {
   if (notes.length) nodes.push(h2('Sobre a sua conta'), card(notes.map((n) => el('div', 'note', n))));
   const r = g.rates || {};
   const have = xpTotal(g.lv) + g.xp;
-  const targets = levelTargets(g.lv);
+  const targets = ladderOpen ? levelLadder(g.lv) : levelTargets(g.lv);
   const x = g.extra || {};
   nodes.push(
     h2('Conta'),
@@ -221,8 +243,22 @@ function pageResumo(s) {
       row('Vendidos ao NPC nesta sessão', g.stats.sold ? `${g.stats.sold} · ${fmt(g.stats.soldGold)}` : '0'),
       row('Guardados na Coleção nesta sessão', String(g.stats.kept)),
     ]),
-    h2('Previsão de nível', r.xp > 0 ? 'no ritmo atual · de 50 em 50, sem teto' : ''),
-    card(targets.length && r.xp > 0 ? targets.map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta((xpTotal(t) - have) / r.xp))) : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]),
+    h2('Previsão de nível', r.xp > 0 ? 'no ritmo atual' : ''),
+    card(
+      targets.length && r.xp > 0
+        ? targets
+            .map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta((xpTotal(t) - have) / r.xp)))
+            .concat(
+              btn(ladderOpen ? 'Mostrar só as próximas' : `Mostrar a sequência inteira (${levelLadder(g.lv).length} metas)`, 'wide mini', () => {
+                ladderOpen = !ladderOpen;
+                try {
+                  localStorage.setItem('pk_ladder', ladderOpen ? '1' : '0');
+                } catch (e) {}
+                if (last) render(last);
+              }, 'De 50 em 50 até o Nv 1.000, de 100 em 100 até 5.000, de 500 em 500 até 10.000 e de 1.000 em 1.000 daí em diante')
+            )
+        : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]
+    ),
     h2('Estoque', `teto: ${fmt(s.config['restock.potMax'])} poções`),
     card([stockRow('Poções', g.pot, r.pot), row('Revives', fmt(g.rev), g.rev >= 0 && g.rev < 30 ? 'warn' : null), stockRow('Ultra Balls', g.balls, r.balls)]),
     h2('Bônus de XP'),
