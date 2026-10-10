@@ -107,7 +107,16 @@ function renderNav(s) {
 
 // XP acumulado do treinador até o início do nível L.
 const xpTotal = (lv) => (50 / 3) * (lv ** 3 - 6 * lv ** 2 + 17 * lv - 12);
-const TARGETS = [150, 200, 250, 300, 400, 500];
+// Metas da previsão: os próximos múltiplos de 50, sem teto, mais a próxima região do Mapa se ela ficar além deles.
+const REGIONS = [[150, 'Outland'], [500, 'Hoenn'], [1000, 'Sinnoh'], [5000, 'Unova'], [10000, 'Kalos'], [25000, 'Alola']];
+const levelTargets = (lv) => {
+  const first = (Math.floor(lv / 50) + 1) * 50;
+  const out = [0, 1, 2, 3].map((i) => first + i * 50);
+  const next = REGIONS.find(([l]) => l > lv);
+  if (next && !out.includes(next[0])) out.push(next[0]);
+  return out.sort((a, b) => a - b);
+};
+const regionAt = (lv) => (REGIONS.find(([l]) => l === lv) || [])[1];
 function eta(hours) {
   if (!isFinite(hours)) return '–';
   const when = new Date(Date.now() + hours * 3600000);
@@ -197,7 +206,7 @@ function pageResumo(s) {
   if (notes.length) nodes.push(h2('Sobre a sua conta'), card(notes.map((n) => el('div', 'note', n))));
   const r = g.rates || {};
   const have = xpTotal(g.lv) + g.xp;
-  const targets = TARGETS.filter((t) => t > g.lv).slice(0, 4);
+  const targets = levelTargets(g.lv);
   const x = g.extra || {};
   nodes.push(
     h2('Conta'),
@@ -209,7 +218,7 @@ function pageResumo(s) {
       row('Guardados na Coleção nesta sessão', String(g.stats.kept)),
     ]),
     h2('Previsão de nível', r.xp > 0 ? 'no ritmo atual' : ''),
-    card(targets.length && r.xp > 0 ? targets.map((t) => row('Nv ' + t, eta((xpTotal(t) - have) / r.xp))) : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]),
+    card(targets.length && r.xp > 0 ? targets.map((t) => row('Nv ' + fmt(t) + (regionAt(t) ? ' · abre ' + regionAt(t) : ''), eta((xpTotal(t) - have) / r.xp))) : [el('div', 'empty', 'Medindo o ritmo (uns 3 minutos de caça).')]),
     h2('Estoque', `teto: ${fmt(s.config['restock.potMax'])} poções`),
     card([stockRow('Poções', g.pot, r.pot), row('Revives', fmt(g.rev), g.rev >= 0 && g.rev < 30 ? 'warn' : null), stockRow('Ultra Balls', g.balls, r.balls)]),
     h2('Bônus de XP'),
