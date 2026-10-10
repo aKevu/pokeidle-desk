@@ -814,8 +814,13 @@ function createTab(kind, slug, url, title) {
     }
   });
   wc.setMaxListeners(40);
+  // O jogo pede confirmação ao sair da página; dentro do app ninguém veria esse aviso e a recarga ficaria bloqueada.
+  wc.on('will-prevent-unload', (e) => {
+    if (tab.allowUnload || quitting) e.preventDefault();
+  });
   wc.on('did-finish-load', () => {
     tab.fails = 0;
+    tab.allowUnload = false;
     inject(tab);
   });
   // Sem rede na abertura a aba ficaria em branco para sempre: tenta de novo, cada vez com mais intervalo (até 2 min).
@@ -1593,7 +1598,26 @@ ipcMain.on('ui-ready', () => {
   sendStatus();
 });
 ipcMain.on('select', (_e, id) => select(id));
-ipcMain.on('reload-active', () => tabs.get(activeId) && tabs.get(activeId).view.webContents.reload());
+// Recarregar o jogo no meio da caça conta como derrota: pergunta antes. O jogo também tenta segurar a saída
+// da página; depois do seu "sim" a recarga é liberada (sem isso o botão não fazia nada durante a caça).
+ipcMain.on('reload-active', async () => {
+  const tab = tabs.get(activeId);
+  if (!tab) return;
+  if (tab.kind === 'game' && tab.state && tab.state.hunting) {
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Recarregar o jogo',
+      message: 'O personagem está caçando.',
+      detail: 'Recarregar a página no meio da caça conta como derrota no jogo (custa 10% do XP do nível) e interrompe qualquer rotina em andamento. Use "Ir ao Centro" antes, se puder.',
+      buttons: ['Cancelar', 'Recarregar mesmo assim'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (r.response !== 1) return;
+  }
+  tab.allowUnload = true;
+  tab.view.webContents.reload();
+});
 ipcMain.on('action', (_e, name, args) => runAction(name, args || {}));
 const getPath = (obj, key) => key.split('.').reduce((o, p) => (o == null ? o : o[p]), obj);
 const tunables = () => Object.fromEntries(Object.keys(TUNABLE).map((k) => [k, getPath(cfg, k)]));
