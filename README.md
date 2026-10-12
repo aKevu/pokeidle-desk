@@ -39,13 +39,19 @@ O jogo precisa estar **em português**: o app lê os textos da tela nesse idioma
 
 | Aba | O que tem |
 |---|---|
-| **Resumo** | Nível, XP por hora, previsão de nível, estoque em horas, bônus ativos, rank do PvP, consumo de CPU e memória |
+| **Resumo** | Revisão da conta, nível, XP por hora, previsão de nível, estoque em horas, bônus ativos, rank do PvP, consumo de CPU e memória |
 | **Caça** | Estimativa de XP por hora de cada área liberada, teste real de uma área, troca de área, melhor equipe, evolução, Oferenda |
 | **Mercado** | Venda das pedras que sobram e radar de flip no Mercado da Comunidade |
 | **Lives** | Canais oficiais ao vivo, preferidos da Kick, pontos, resgate de bônus, abrir e fechar cada live |
 | **Auto** | Interruptores das automações |
 | **Histórico** | Tudo o que o app e as automações fizeram; clique numa entrada para ver o resumo |
 | **Ajustes** | Tetos de estoque, regra do que fica na Coleção, limites de lives, orçamento do flip |
+
+### Revisão da conta
+
+O botão *Revisar a conta*, no topo do Resumo, confere de uma vez o que normalmente se olharia tela por tela: se a área de caça é a melhor pela estimativa, VIP e boosts, bônus da Twitch e da Kick, lives paradas ou sem login, estoque, tokens, fragmentos e pedras na bolsa, tamanho da Coleção, rank e equipe do PvP, automações desligadas, falhas das últimas 24 horas e versão nova do app. Cada ponto sai como *problema*, *atenção*, *para saber* ou *em ordem*, e os que têm solução trazem o botão que resolve.
+
+A revisão só lê: abre a bolsa, o PvP e a janela da Kick no jogo por alguns segundos e não compra, vende nem troca nada. Ela também roda sozinha a cada 6 horas (dá para desligar na aba *Auto*).
 
 ### Automações
 
@@ -107,6 +113,7 @@ O app não envia seus dados a lugar nenhum. Além do jogo e das lives que ele ab
 - Só foi usado no Windows, e numa única conta (VIP, nível alto, jogo em português).
 - O app lê a tela do jogo. Uma atualização do PokéIdle que mude a interface pode quebrar uma rotina até o app ser ajustado; quando uma leitura falha, ele não age (por exemplo, não vende nada se não conseguir ler uma carta do Depot).
 - A estimativa de áreas é um cálculo calibrado pelo ritmo atual. Use *Testar* para medir de verdade.
+- Filtros que você deixar ligados no mapa do jogo (tipo, "só liberadas", faixa de nível) não atrapalham: para ler o mapa o app os limpa por um instante e põe de volta. Se um filtro esconder a área para onde ele precisa ir, o filtro é limpo e isso fica registrado.
 - Links e janelas que saem do jogo, da Twitch, da Kick ou do Discord abrem no seu navegador, não dentro do app.
 - A Kick precisa estar em português para o app ler os pontos e resgatar.
 - Em áreas onde o dano não dá trégua, sair para o Centro usa "Desistir do Combate", que custa 10% do XP do nível.

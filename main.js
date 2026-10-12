@@ -122,7 +122,7 @@ const readJson = (file, fallback) => {
 const settings = {
   panel: true,
   // Numa instalação nova só vêm ligadas as automações que não vendem, não compram e não resgatam nada.
-  auto: { watchdog: true, guard: true, lives: true, passe: true, restock: false, depot: false, kick: false, stones: false, flip: false, bestArea: false, pvp: false },
+  auto: { watchdog: true, guard: true, lives: true, passe: true, restock: false, depot: false, kick: false, stones: false, flip: false, bestArea: false, pvp: false, review: true },
   closed: [],
   lastHunt: null,
   parked: false,
@@ -135,6 +135,8 @@ const settings = {
   kickPrefs: [],
   // Canais oficiais lidos do próprio jogo (substituem os do config.json quando existem).
   roster: null,
+  // Última revisão da conta: quando foi e os pontos levantados.
+  review: null,
 };
 {
   const saved = readJson(SETTINGS, {});
@@ -148,7 +150,7 @@ const settings = {
     cfg.kick = settings.roster.kick.slice();
   }
   if (Array.isArray(saved.kickPrefs)) settings.kickPrefs = saved.kickPrefs.filter((s) => cfg.kick.includes(s));
-  for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen']) if (saved[k] != null) settings[k] = saved[k];
+  for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen', 'review']) if (saved[k] != null) settings[k] = saved[k];
 
 }
 // Gravações em rajada viram uma só, feita num arquivo temporário e trocada no fim: um arquivo pela metade
@@ -387,6 +389,7 @@ const held = (id, cond, ms) => {
 };
 
 let adviceTry = 0;
+let reviewTry = 0;
 async function watch(g) {
   const now = Date.now();
   // Área atual lembrada para a proteção saber para onde voltar.
@@ -424,6 +427,17 @@ async function watch(g) {
   if (g.hunting && g.rates && g.rates.xp && !g.modal && stale && now - adviceTry > 10 * 60000) {
     adviceTry = now;
     gameJs("localStorage.getItem('pk_dex_v1') && window.__huntAdvice ? window.__huntAdvice(true) : null").catch(() => {});
+  }
+
+  // Revisão automática da conta: a cada 6 h. Só lê; os problemas graves novos viram notificação.
+  if (settings.auto.review && g.hunting && g.rates && g.rates.xp && !g.modal && now - ((settings.review && settings.review.at) || 0) > 6 * 3600000 && now - reviewTry > 15 * 60000) {
+    reviewTry = now;
+    const before = new Set(((settings.review && settings.review.items) || []).filter((i) => i.level === 'bad').map((i) => i.text));
+    execute('review', {}, 'Revisão automática da conta').then(() => {
+      const fresh = ((settings.review && settings.review.items) || []).filter((i) => i.level === 'bad' && !before.has(i.text));
+      if (fresh.length) notify('PokéIdle Desk: revisão da conta', fresh[0].text);
+    });
+    return;
   }
 
   // Personagem parado no Centro sem ter sido você: cura, repõe (só com a Recompra ligada) e volta para a última área.
@@ -548,7 +562,16 @@ function updateAlerts() {
     if (held(kind + '-login', open.length > 0 && open.every((c) => c.logged === false), 5 * 60000)) add(kind + '-login', 'bad', `${name} sem login no app: use "Login das lives".`);
     for (const c of open) {
       // Live que acabou de sair do ar fica com o vídeo parado até o gerenciador fechar a aba: isso não é problema.
-      if (held(`stop:${kind}:${c.slug}`, c.playing === false && c.live === true, 4 * 60000)) add(`stop:${kind}:${c.slug}`, 'warn', `${name} · ${c.slug}: vídeo parado.`);
+      if (held(`stop:${kind}:${c.slug}`, c.playing === false && c.live === true, 4 * 60000)) {
+        add(`stop:${kind}:${c.slug}`, 'warn', `${name} · ${c.slug}: vídeo parado.`);
+        // Parada que não se resolve sozinha: a aba é recarregada, no máximo uma vez a cada 10 min.
+        const t = findTab(kind, c.slug);
+        if (t && settings.auto.lives && !(t.reloadedAt > Date.now() - 10 * 60000)) {
+          t.reloadedAt = Date.now();
+          t.view.webContents.reload();
+          record({ title: `Lives: ${kind}:${c.slug} estava com o vídeo parado; aba recarregada`, ok: true });
+        }
+      }
       if (kind !== 'kick' || !c.points) continue;
       const seen = kickSeen.get(c.slug);
       if (!seen || seen.pts !== c.points) kickSeen.set(c.slug, { pts: c.points, at: Date.now() });
@@ -1259,9 +1282,51 @@ const DEPOT_RESULT = {
   erro: 'A revisão do Depot deu erro (veja a entrada do jogo logo acima)',
 };
 
+// --- Revisão da conta: junta tudo o que o app sabe ler e aponta o que merece atenção ---
+// A leitura abre a bolsa, o PvP e a janela da Kick no jogo por alguns segundos; nada é comprado, vendido ou trocado.
+const buildReview = require('./lib/review');
+async function accountReview() {
+  await poll().catch(() => null);
+  const scan = await gameJs('window.__accountScan ? window.__accountScan() : null').catch(() => null);
+  // Com a automação do PvP desligada a leitura é só leitura: a fila não é mexida.
+  const pv = await gameJs(`window.__pvpKeep ? window.__pvpKeep(${settings.auto.pvp ? 'false' : 'true'}) : null`).catch(() => null);
+  await gameJs('window.__readKick ? window.__readKick() : null').catch(() => null);
+  await gameJs("localStorage.getItem('pk_dex_v1') && window.__huntAdvice ? window.__huntAdvice(true) : null").catch(() => null);
+  const g = await collectGame();
+  const items = buildReview({
+    g,
+    scan: scan && scan.ok ? scan : null,
+    pv: pv && pv.ok ? pv : null,
+    channels: channels(),
+    settings,
+    cfg,
+    update,
+    history,
+    perf,
+    kickHour: KICK_HOUR,
+  });
+  settings.review = { at: Date.now(), items, partial: !(scan && scan.ok) };
+  saveSettings();
+  return settings.review;
+}
+
 // Cada ação: título e explicação mostrados nas duas confirmações, e o que ela faz.
 // confirm: false só nas que apenas leem informação.
 const ACTIONS = {
+  review: {
+    confirm: false,
+    title: () => 'Revisão da conta',
+    run: async () => {
+      const rv = await accountReview();
+      const LEVEL = { bad: 'PROBLEMA', warn: 'ATENÇÃO', info: 'Para saber' };
+      const hot = rv.items.filter((i) => i.level !== 'ok');
+      const oks = rv.items.length - hot.length;
+      const detail = hot.map((i) => `${LEVEL[i.level]} · ${i.group}: ${i.text}`);
+      detail.push(`${oks} ponto(s) em ordem.`);
+      if (rv.partial) detail.push('Revisão parcial: havia uma janela aberta no jogo e a bolsa não foi lida.');
+      return { ok: true, detail };
+    },
+  },
   refresh: {
     confirm: false,
     title: () => 'Verificação geral',
@@ -1477,6 +1542,7 @@ const AUTO_INFO = {
   restock: ['Ligar a recompra automática', 'O app passa a gastar Coins sozinho em poções, revives e Ultra Balls quando o estoque fica abaixo de 2 horas de uso.'],
   depot: ['Ligar a revisão automática do Depot', 'A cada 15 minutos o app guarda os nascimentos raros na Coleção e VENDE o resto ao NPC, sem perguntar.'],
   lives: ['Ligar o gerenciador de lives', 'O app passa a abrir sozinho os canais oficiais que entram ao vivo e a fechar os que saem. Na Kick ele mantém 2 lives abertas (só 2 contam pontos por vez), começando pelas suas preferidas.'],
+  review: ['Ligar a revisão automática da conta', 'A cada 6 horas o app abre a bolsa, o PvP e a janela da Kick no jogo por alguns segundos e confere caça, bônus, estoque, lives, bolsa, PvP e o próprio app. Ele só lê e aponta no Resumo o que merece atenção: não compra, não vende e não troca nada.'],
   pvp: ['Manter a fila do PvP ligada', 'O PvP Ranqueado roda sozinho enquanto você caça e perder não custa XP, só PR. O app confere a cada poucos minutos se a busca continua; se ela cair, liga a fila automática do jogo (recurso VIP), esconde a tela de batalha e procura partida de novo. Ele não mexe na sua equipe de PvP.'],
   kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar.`],
 };

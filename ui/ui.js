@@ -210,6 +210,50 @@ function renderHero(s) {
   $('footVer').textContent = 'v' + (s.version || '');
 }
 
+// --- Revisão da conta: o que merece atenção, com o botão que resolve quando existe um ---
+let reviewAll = false;
+const RV_LABEL = { bad: 'Problema', warn: 'Atenção', info: 'Para saber', ok: 'Em ordem' };
+function reviewCard(s) {
+  const rv = s.settings.review;
+  const nodes = [];
+  const today = rv && new Date(rv.at).toDateString() === new Date().toDateString();
+  const when = rv ? (today ? `feita às ${hhmm(rv.at)}` : `feita em ${new Date(rv.at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`) : 'ainda não feita';
+  nodes.push(h2('Revisão da conta', when));
+  const rows = [];
+  const items = rv ? rv.items : [];
+  const order = { bad: 0, warn: 1, info: 2, ok: 3 };
+  const shown = items.filter((i) => reviewAll || i.level !== 'ok').sort((a, b) => order[a.level] - order[b.level]);
+  for (const i of shown) {
+    const d = el('div', 'rv ' + i.level);
+    const dot = el('i');
+    dot.title = RV_LABEL[i.level];
+    const t = el('div');
+    t.append(el('small', null, i.group), el('span', null, i.text));
+    d.append(dot, t);
+    if (i.action) d.append(actionBtn(s, i.action.label, i.action.name, true, null, i.action.args, 'mini primary'));
+    rows.push(d);
+  }
+  const oks = items.filter((i) => i.level === 'ok').length;
+  const bad = items.filter((i) => i.level === 'bad' || i.level === 'warn').length;
+  if (!rv) rows.push(el('div', 'empty', 'Confere caça, bônus, estoque, lives, bolsa, PvP e o próprio app, e aponta o que merece atenção. Não muda nada na conta.'));
+  else if (!shown.length) rows.push(el('div', 'empty', 'Tudo em ordem.'));
+  if (rv && rv.partial) rows.push(el('div', 'note', 'Revisão parcial: havia uma janela aberta no jogo e a bolsa não foi lida.'));
+  const go = actionBtn(s, rv ? 'Revisar de novo' : 'Revisar a conta agora', 'review', true, 'Abre a bolsa, o PvP e a janela da Kick no jogo por alguns segundos para ler; não compra, não vende e não troca nada', null, bad || !rv ? 'primary' : null);
+  rows.push(go);
+  if (oks) {
+    rows.push(
+      btn(reviewAll ? 'Esconder o que está em ordem' : `Mostrar os ${oks} pontos em ordem`, 'mini', () => {
+        reviewAll = !reviewAll;
+        if (last) render(last);
+      })
+    );
+  }
+  nodes.push(card(rows));
+  return nodes;
+}
+
+// O jogo mostra o tempo que falta ("53m 47s") só enquanto há horas de bônus; sem horas o texto é outro.
+const kickOn = (t) => /\d+\s*[hms]/i.test(t) && !/POR RESGATE/i.test(t);
 function pageResumo(s) {
   const g = s.game;
   const logged = !!(g && g.logged);
@@ -240,6 +284,7 @@ function pageResumo(s) {
     nodes.push(h2('Primeiros passos'), card([steps]));
   }
   if (!logged) return nodes;
+  nodes.push(...reviewCard(s));
   const notes = (g.compat && g.compat.notes) || [];
   if (notes.length) nodes.push(h2('Sobre a sua conta'), card(notes.map((n) => el('div', 'note', n))));
   const r = g.rates || {};
@@ -271,7 +316,7 @@ function pageResumo(s) {
     h2('Bônus de XP'),
     card([
       row('Twitch', g.twitch ? '+' + g.twitch : 'sem live contando', g.twitch ? 'ok' : 'warn'),
-      row('Kick (+15%)', g.kick ? `${g.kick} restantes` : 'ainda não lido', g.kick ? 'ok' : null),
+      row('Kick (+15%)', !g.kick ? 'ainda não lido' : kickOn(g.kick) ? `${g.kick} restantes` : 'sem horas ativas agora', !g.kick ? null : kickOn(g.kick) ? 'ok' : 'warn'),
       row('Passe diário', x.passeNext && x.passeNext > Date.now() ? `próximo às ${hhmm(x.passeNext)}` : s.settings.auto.passe ? 'checando…' : 'automação desligada'),
     ]),
     h2('PvP Ranqueado', g.pvp && g.pvp.queued ? 'na fila' : ''),
@@ -453,6 +498,7 @@ function pageLives(s) {
 const AUTOS = [
   ['Proteções', [
     ['watchdog', 'Proteção contra parada', () => 'Parado 5 min no Centro sem você pedir: cura e volta para a última área. Só repõe o estoque se a Recompra estiver ligada.'],
+    ['review', 'Revisão automática da conta', () => 'A cada 6 h confere caça, bônus, estoque, lives, bolsa, PvP e o próprio app, e aponta no Resumo o que merece atenção. Só lê.'],
     ['guard', 'Proteção das automações do jogo', () => 'Religa as automações do jogo (bola, poção, revive, volta à caça) que já estavam ligadas e se desligaram; troca o item selecionado se acabar.'],
   ]],
   ['Rotina', [

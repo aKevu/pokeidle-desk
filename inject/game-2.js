@@ -619,6 +619,41 @@
       return out;
     });
 
+  // --- Revisão da conta: lê o painel do treinador, a bolsa e a Coleção. Não muda nada ---
+  window.__accountScan = () =>
+    locked(async () => {
+      const line = (sel) => {
+        const e = document.querySelector(sel);
+        return e && e.offsetParent ? e.innerText.replace(/\n+/g, ' ').trim() : null;
+      };
+      const out = { ok: true, at: Date.now(), vip: line('.tr-ativo.vip'), guild: line('.tr-ativo.guild-boost'), event: null, rare: [], stones: [], collection: null };
+      const ev = ((document.getElementById('palco') || {}).innerText || '').match(/EVENTO![^\n]*/);
+      out.event = ev ? ev[0].trim() : null;
+      window.__menu('Abrir Inventário');
+      await sl(1500);
+      const bag = window.__top();
+      if (!bag) return out;
+      const tab = async (name) => {
+        const b = [...bag.querySelectorAll('button')].find((x) => x.offsetParent && x.textContent.replace(/\s+/g, ' ').includes(name));
+        if (!b) return false;
+        b.click();
+        await sl(1100);
+        return true;
+      };
+      const cards = () =>
+        vis('.bolsa-card')
+          .map((c) => ({ name: ((c.querySelector('.mk-nome') || {}).textContent || '').trim(), qty: num(((c.querySelector('.bolsa-qtd') || {}).textContent || '0').replace(/[^\d.]/g, '') || '0') }))
+          .filter((x) => x.name);
+      if (await tab('Itens Raros')) out.rare = cards();
+      if (await tab('Pedras')) out.stones = cards();
+      if (await tab('Coleção')) {
+        const n = (window.__top() ? window.__top().innerText : '').match(/([\d.]+) na Coleção/);
+        out.collection = n ? num(n[1]) : null;
+      }
+      await P.closeAll();
+      return out;
+    });
+
   // --- PvP Ranqueado: a fila automática é do próprio jogo (VIP). O app só confere se ela continua ligada ---
   // e religa quando cai (o jogo a desliga numa recarga da página ou quando alguém cancela a busca).
   const pvp = { last: 0, offSince: 0, info: null };
@@ -626,7 +661,8 @@
     const p = document.getElementById('pvp-fila-pill');
     return !!(p && p.offsetParent);
   };
-  window.__pvpKeep = () =>
+  // readOnly: só lê o placar e a equipe; não liga a fila nem procura partida.
+  window.__pvpKeep = (readOnly) =>
     locked(async () => {
       pvp.last = Date.now();
       window.__menu('PvP');
@@ -637,6 +673,8 @@
         return { ok: false, why: 'a tela do PvP não abriu' };
       }
       const done = [];
+      const btn = (t) => [...m.querySelectorAll('button')].find((b) => b.offsetParent && b.innerText.trim() === t);
+      if (!readOnly) {
       // Com a tela de batalha aberta as outras rotinas param para não clicar por cima dela.
       const off = m.querySelector('input[name="pvp-tela"][value="off"]');
       if (off && !off.checked) {
@@ -650,7 +688,6 @@
         await sl(800);
         done.push('fila automática ligada');
       }
-      const btn = (t) => [...m.querySelectorAll('button')].find((b) => b.offsetParent && b.innerText.trim() === t);
       if (!btn('Cancelar busca')) {
         const go = btn('Procurar partida');
         if (go && !go.disabled) {
@@ -659,10 +696,14 @@
           done.push('busca iniciada');
         }
       }
+      }
       const t = m.innerText.replace(/\n+/g, ' | ');
+      // Níveis da equipe de PvP, na ordem em que entram.
+      const sec = t.match(/SUA EQUIPE DE PVP(.*?)FORMAÇÕES SALVAS/);
+      const team = sec ? [...sec[1].matchAll(/Nv ?(\d+) · ⚔/g)].map((x) => +x[1]) : [];
       const vd = t.match(/(\d+)V \/ (\d+)D \| (\d+)%/);
       const pos = t.match(/([\d.]+)º de ([\d.]+)/);
-      pvp.info = { at: Date.now(), wins: vd ? +vd[1] : null, losses: vd ? +vd[2] : null, rate: vd ? +vd[3] : null, pos: pos ? P.num(pos[1]) : null, of: pos ? P.num(pos[2]) : null, searching: !!btn('Cancelar busca') || done.includes('busca iniciada') };
+      pvp.info = { team, at: Date.now(), wins: vd ? +vd[1] : null, losses: vd ? +vd[2] : null, rate: vd ? +vd[3] : null, pos: pos ? P.num(pos[1]) : null, of: pos ? P.num(pos[2]) : null, searching: !!btn('Cancelar busca') || done.includes('busca iniciada') };
       await P.closeAll();
       if (done.length) note('PvP: ' + done.join(', '), [vd ? `${vd[1]}V / ${vd[2]}D (${vd[3]}%)` : 'placar não lido', pos ? `${pos[1]}º de ${pos[2]}` : '']);
       return { ok: true, done, info: pvp.info };

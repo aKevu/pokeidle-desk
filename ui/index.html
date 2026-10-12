@@ -74,6 +74,14 @@
   .primary:hover:not(:disabled) { background: var(--accent2) !important; }
   .mini { height: 23px; padding: 0 8px; font-size: 12px; background: var(--card2); }
   .card > button { width: 100%; margin-top: 6px; }
+  .rv { display: grid; grid-template-columns: 9px 1fr auto; gap: 8px; align-items: start; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .rv i { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--dim); }
+  .rv.bad i { background: var(--bad); }
+  .rv.warn i { background: var(--warn); }
+  .rv.info i { background: var(--accent2); }
+  .rv.ok i { background: var(--ok); }
+  .rv small { display: block; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .rv span { font-size: 12.5px; line-height: 1.35; }
   .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
   .item:last-child { border-bottom: 0; }
   .item .name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 500; }

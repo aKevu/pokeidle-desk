@@ -36,6 +36,10 @@
         const b = document.querySelector(sel);
         if (b && b.offsetParent) b.click();
       }
+      // Erro do player ("Houve um erro de rede… Clique aqui para recarregar o reprodutor"): sem o clique a live fica parada para sempre.
+      const gate = document.querySelector('[data-a-target="player-overlay-content-gate"]');
+      const again = gate && gate.offsetParent && [...gate.querySelectorAll('button')].find((b) => /recarregar|reload/i.test(b.innerText));
+      if (again) again.click();
       const v = liveVideo();
       if (v) {
         // O som fica cortado pela própria aba; o player precisa estar com som para contar presença.

@@ -159,6 +159,7 @@
   const total = (lv, xp) => (50 / 3) * (lv ** 3 - 6 * lv ** 2 + 17 * lv - 12) + xp;
   const hist = [];
   let wasHunting = null;
+  let lastWhere = null;
   const sample = () => {
 
     let rd, st;
@@ -175,8 +176,16 @@
       hist.length = 0;
     }
     if (!wasHunting) return;
-    const last = hist[hist.length - 1];
+    let last = hist[hist.length - 1];
     const s = { t: now, x: total(rd.lv, rd.xp), pot: st.pot, balls: rd.balls, gold: rd.gold, dPot: 0, dBall: 0, dGold: 0 };
+    // XP total caiu (desmaio ou desistência custam 10% do nível) ou a área mudou: a medição recomeça,
+    // senão a perda entraria na conta como se fosse ritmo baixo.
+    const where = hud();
+    if (last && (s.x < last.x || where !== lastWhere)) {
+      hist.length = 0;
+      last = null;
+    }
+    lastWhere = where;
     if (last) {
       // Compras e vendas aparecem como saltos; só as quedas (uso) e os ganhos pequenos (abates) contam.
       if (st.pot >= 0 && st.pot < last.pot) s.dPot = last.pot - st.pot;
@@ -486,7 +495,10 @@
       const t = window.__mtxt(0, 600);
       if (/BÔNUS NA KICK/.test(t)) {
         const m = t.match(/\+15% XP 300 PONTOS (.*?) \+15% Capture/);
-        buffs.kick = m ? m[1].trim() : '?';
+        // A linha do +15% XP fica marcada como ativa enquanto houver horas; sem horas ela mostra só "1H POR RESGATE".
+        const rec = [...window.__top().querySelectorAll('.kk-rec')].find((r) => r.innerText.includes('+15% XP'));
+        if (rec) buffs.kick = rec.classList.contains('ativo') ? rec.innerText.trim().split('\n').pop().trim() : 'sem horas';
+        else buffs.kick = m ? m[1].trim() : '?';
         buffs.kickAt = Date.now();
       }
       return buffs.kick;
@@ -551,7 +563,7 @@
     return regionButtons().length > 0;
   };
   const markerInfo = (b, region) => {
-    const m = (b.title || '').split('\n')[0].match(/^(.*?) — nível ([\d.]+)/);
+    const m = (b.title || '').split('\n')[0].match(/^(.*?) — (?:precisa de )?nível ([\d.]+)/);
     return { slug: b.dataset.slug, name: m ? m[1] : b.dataset.slug, lv: m ? num(m[2]) : 0, locked: b.dataset.travado === '1', region };
   };
   // O mapa lido fica guardado para o app saber em que área a caça está, mesmo depois de recarregar.
@@ -568,11 +580,81 @@
     return m ? { slug: m.slug, name: m.name, lv: m.lv } : null;
   };
   // Lê os marcadores de todas as regiões: quais áreas existem e quais estão liberadas.
+  // Os filtros do mapa (tipo, "só liberadas", capturados, faixa de nível, busca) escondem marcadores, e o jogo lembra deles.
+  // Para o app enxergar todas as áreas eles são limpos; `restore` põe de volta o que estava.
+  const clearMapFilters = async () => {
+    const m = window.__top();
+    const undo = [];
+    if (!m) return { n: 0, restore: async () => {} };
+    const setInput = (i, v) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, v);
+      i.dispatchEvent(new Event('input', { bubbles: true }));
+      i.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    // Trocar o tipo desmarca "Fraco contra" e "Forte contra", e a leitura passa por todas as regiões:
+    // o estado dessas caixas e a região aberta são anotados para voltar no fim.
+    const boxes = ['#f-fraco-contra', '#f-forte-contra'].map((sel) => [sel, !!(m.querySelector(sel) || {}).checked]);
+    const region = (regionButtons().find((b) => b.classList.contains('on')) || {}).innerText;
+    // Grupos de botões em que o primeiro é "todos": tipo e capturados.
+    for (const sel of ['button.tipo-btn', 'button.mapa-captura-bt']) {
+      const list = [...m.querySelectorAll(sel)];
+      const on = list.find((b, i) => i > 0 && b.classList.contains('on'));
+      if (!on || !list[0]) continue;
+      const label = on.innerText.trim();
+      list[0].click();
+      undo.push(() => {
+        const t = window.__top();
+        const b = t && [...t.querySelectorAll(sel)].find((x) => x.innerText.trim() === label);
+        if (b && !b.classList.contains('on')) b.click();
+      });
+    }
+    const lib = m.querySelector('#f-liberadas');
+    if (lib && lib.checked) {
+      lib.click();
+      undo.push(() => {
+        const c = document.querySelector('#f-liberadas');
+        if (c && !c.checked) c.click();
+      });
+    }
+    for (const sel of ['#f-nivel-min', '#f-nivel-max', 'input[type="text"]']) {
+      const i = m.querySelector(sel);
+      if (!i || !i.value) continue;
+      const v = i.value;
+      setInput(i, '');
+      undo.push(() => {
+        const t = window.__top();
+        const x = t && t.querySelector(sel);
+        if (x) setInput(x, v);
+      });
+    }
+    if (undo.length) await sl(800);
+    return {
+      n: undo.length,
+      restore: async () => {
+        for (const f of undo.reverse()) {
+          try {
+            f();
+          } catch (e) {}
+        }
+        if (undo.length) {
+          await sl(500);
+          for (const [sel, on] of boxes) {
+            const c = document.querySelector(sel);
+            if (c && c.checked !== on) c.click();
+          }
+        }
+        const rb = region && regionButtons().find((b) => b.innerText === region);
+        if (rb && !rb.classList.contains('on')) rb.click();
+        await sl(300);
+      },
+    };
+  };
   window.__mapScan = async () => {
     if (busy) return null;
     busy = true;
     try {
       if (!(await openMap())) return null;
+      const filters = await clearMapFilters();
       const marks = [];
       for (const rb of regionButtons()) {
         const region = rb.textContent.trim().replace(/ · Nv.*$/, '');
@@ -580,6 +662,8 @@
         await sl(600);
         for (const b of window.__top().querySelectorAll('button.marcador')) marks.push(markerInfo(b, region));
       }
+      // O filtro que você deixou no mapa volta a valer.
+      await filters.restore();
       window.__pkMap = { at: Date.now(), lv: window.__rd().lv, marks };
       try {
         localStorage.setItem(MAP_KEY, JSON.stringify(window.__pkMap));
@@ -593,6 +677,13 @@
   // Abre o mapa na região certa e devolve onde clicar; o clique de verdade é dado pelo app.
   const locate = async (slug) => {
     if (!(await openMap())) return { ok: false, why: 'o mapa não abriu' };
+    for (let pass = 0; pass < 2; pass++) {
+    // Não achou com os filtros do mapa como estavam: limpa os filtros e procura de novo.
+    if (pass === 1) {
+      const f = await clearMapFilters();
+      if (!f.n) break;
+      note('Mapa: um filtro do mapa escondia a área; limpei os filtros para entrar nela');
+    }
     // Duas passadas: na primeira a região pode ainda estar desenhando os marcadores.
     for (const rb of [...regionButtons(), ...regionButtons()]) {
       rb.click();
@@ -630,6 +721,7 @@
       }
       await closeAll();
       return { ok: false, why: 'marcador coberto por outro elemento', ...info };
+    }
     }
     const over = window.__top();
     const seen = over ? over.innerText.trim().split('\n')[0].slice(0, 40) : 'nenhuma';
