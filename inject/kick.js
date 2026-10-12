@@ -71,7 +71,7 @@
     const raw = pb ? pb.innerText.trim() : '';
     const pts = /^\d+([.,]\d+)?(\smil)?$/.test(raw) ? raw : null;
     // O contador de pontos do canal só aparece para quem está logado.
-    return { points: pts || null, logged: !!pts, playing: !!(v && !v.paused), height: v ? v.videoHeight : 0, dialog: welcome(), following };
+    return { points: pts || null, logged: !!pts, playing: !!(v && !v.paused), height: v ? v.videoHeight : 0, dialog: welcome(), following, w: innerWidth };
   };
   timers.push(setInterval(tick, 10000));
   setTimeout(tick, 4000);

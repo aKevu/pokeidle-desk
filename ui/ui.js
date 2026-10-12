@@ -212,15 +212,46 @@ function renderHero(s) {
 
 // --- Revisão da conta: o que merece atenção, com o botão que resolve quando existe um ---
 let reviewAll = false;
+let reviewOpen = true;
+try {
+  reviewOpen = localStorage.getItem('pk_review_open') !== '0';
+} catch (e) {}
 const RV_LABEL = { bad: 'Problema', warn: 'Atenção', info: 'Para saber', ok: 'Em ordem' };
 function reviewCard(s) {
   const rv = s.settings.review;
   const nodes = [];
   const today = rv && new Date(rv.at).toDateString() === new Date().toDateString();
   const when = rv ? (today ? `feita às ${hhmm(rv.at)}` : `feita em ${new Date(rv.at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`) : 'ainda não feita';
-  nodes.push(h2('Revisão da conta', when));
-  const rows = [];
+  // O título recolhe e mostra a revisão; recolhida, fica só uma linha com a contagem por nível.
+  const head = h2('Revisão da conta', when);
+  head.className = 'fold';
+  const flip = () => {
+    reviewOpen = !reviewOpen;
+    try {
+      localStorage.setItem('pk_review_open', reviewOpen ? '1' : '0');
+    } catch (e) {}
+    if (last) render(last);
+  };
+  const fold = btn(reviewOpen ? 'Recolher' : 'Mostrar', 'mini', flip, reviewOpen ? 'Recolher a revisão: fica só uma linha com a contagem' : 'Mostrar a revisão inteira');
+  head.append(fold);
+  nodes.push(head);
   const items = rv ? rv.items : [];
+  if (!reviewOpen) {
+    const count = (lv) => items.filter((i) => i.level === lv).length;
+    const line = el('div', 'rv-sum');
+    for (const [lv, label] of [['bad', 'problema(s)'], ['warn', 'atenção'], ['info', 'para saber'], ['ok', 'em ordem']]) {
+      if (!count(lv)) continue;
+      const part = el('span', 'rv ' + lv);
+      part.append(el('i'), el('span', null, `${count(lv)} ${label}`));
+      line.append(part);
+    }
+    if (!rv) line.append(el('span', null, 'Ainda não feita.'));
+    line.onclick = flip;
+    line.title = 'Mostrar a revisão';
+    nodes.push(card([line]));
+    return nodes;
+  }
+  const rows = [];
   const order = { bad: 0, warn: 1, info: 2, ok: 3 };
   const shown = items.filter((i) => reviewAll || i.level !== 'ok').sort((a, b) => order[a.level] - order[b.level]);
   for (const i of shown) {

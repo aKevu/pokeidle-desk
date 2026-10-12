@@ -360,6 +360,7 @@ async function collect() {
       if (st) {
         tab.state = Object.assign(st, { at: Date.now() });
         tab.miss = 0;
+        if (st.w === 0 && tab.id !== activeId) nudge(tab);
         if (tab.kind === 'kick' && st.points) savePoints(tab.slug, st.points);
       } else if (!onHost(tab) || ++tab.miss >= 3) tab.state = null;
     }
@@ -645,6 +646,19 @@ function sendStatus() {
 // porque foram criadas sem economia de segundo plano, e o jogo para de desenhar mas mantém os timers.
 // force: aba que precisa ser desenhada por um instante mesmo sem estar ativa (clique real no resgate da Kick).
 let forceVisible = null;
+// Uma live recarregada enquanto está escondida pode ficar com a página em tamanho zero até ser mostrada uma vez:
+// sem tamanho a Kick não desenha o chat nem o contador de pontos. A aba é mostrada por 2 s por baixo da ativa.
+const nudged = new Set();
+function nudge(tab) {
+  if (nudged.has(tab.id) || tab.nudgedAt > Date.now() - 60000) return;
+  tab.nudgedAt = Date.now();
+  nudged.add(tab.id);
+  layout();
+  setTimeout(() => {
+    nudged.delete(tab.id);
+    layout();
+  }, 2000);
+}
 function layout() {
   if (!win) return;
   const [w, h] = win.getContentSize();
@@ -654,7 +668,7 @@ function layout() {
     const stream = t.kind === 'twitch' || t.kind === 'kick';
     // Lives inativas ficam num tamanho pequeno: o player da Kick escolhe a qualidade pelo tamanho.
     t.view.setBounds(!active && stream ? { x: 0, y: BAR, width: Math.min(MINI.width, full.width), height: Math.min(MINI.height, full.height) } : full);
-    t.view.setVisible(active || t.id === forceVisible);
+    t.view.setVisible(active || t.id === forceVisible || nudged.has(t.id));
   }
 }
 

@@ -55,6 +55,7 @@
       playing: !!(v && !v.paused && v.readyState > 2),
       height: v ? v.videoHeight : 0,
       logged: /(^|; )login=/.test(document.cookie),
+      w: innerWidth,
     };
   };
   timers.push(setInterval(tick, 20000));
