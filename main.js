@@ -47,7 +47,7 @@ const TUNABLE = {
   'keep.reservaNivel': [1, 100000],
   maxTwitch: [0, 20],
   kickQuality: [0, 1080],
-  maxKick: [0, 2],
+  maxKick: [0, 20],
   'market.keepStones': [0, 99],
   'market.flipBudget': [0, 1e10],
   'market.flipMargin': [0.01, 1],
@@ -76,7 +76,7 @@ const HOSTS = { game: 'pokeidle.io', twitch: 'twitch.tv', kick: 'kick.com' };
 const KICK_HOUR = 300; // pontos de canal por 1 h de +15% XP
 // A Kick só conta pontos em 2 canais ao mesmo tempo por conta (medido em 06/10/2026: com 6 lives abertas, só 2 subiam).
 const KICK_SLOTS = 2;
-cfg.maxKick = Math.min(KICK_SLOTS, Math.max(0, Number(cfg.maxKick) || 0));
+cfg.maxKick = Math.max(0, Number(cfg.maxKick) || 0);
 // Recompensas de pontos de canal da Kick usadas pelo jogo (cada resgate vale 1 h).
 const KICK_REWARDS = {
   xp: { label: '+15% XP', match: 'XP PokeIdle', cost: 300 },
@@ -137,6 +137,8 @@ const settings = {
   roster: null,
   // Última revisão da conta: quando foi e os pontos levantados.
   review: null,
+  // Pontos de canal da Kick vistos por último em cada canal: { canal: { pts, at, approx } }.
+  kickPoints: {},
 };
 {
   const saved = readJson(SETTINGS, {});
@@ -150,7 +152,7 @@ const settings = {
     cfg.kick = settings.roster.kick.slice();
   }
   if (Array.isArray(saved.kickPrefs)) settings.kickPrefs = saved.kickPrefs.filter((s) => cfg.kick.includes(s));
-  for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen', 'review']) if (saved[k] != null) settings[k] = saved[k];
+  for (const k of ['lastHunt', 'parked', 'measures', 'approved', 'unlocked', 'gameVersion', 'updateSeen', 'review', 'kickPoints']) if (saved[k] != null) settings[k] = saved[k];
 
 }
 // Gravações em rajada viram uma só, feita num arquivo temporário e trocada no fim: um arquivo pela metade
@@ -357,6 +359,7 @@ async function collect() {
       if (st) {
         tab.state = Object.assign(st, { at: Date.now() });
         tab.miss = 0;
+        if (tab.kind === 'kick' && st.points) savePoints(tab.slug, st.points);
       } else if (!onHost(tab) || ++tab.miss >= 3) tab.state = null;
     }
     // O que o script do jogo registrou (compras, vendas, capturas guardadas) entra no histórico geral.
@@ -610,6 +613,10 @@ function channels() {
         hours: st && st.points ? Math.floor(parsePoints(st.points) / KICK_HOUR) : 0,
         // Posição entre os preferidos da Kick (0 = não é preferido).
         pref: kind === 'kick' ? settings.kickPrefs.indexOf(slug) + 1 : 0,
+        // Pontos vistos por último neste canal e as horas de +15% XP que eles pagam (valem com a live fechada).
+        following: st && kind === 'kick' ? st.following : null,
+        saved: kind === 'kick' ? settings.kickPoints[slug] || null : null,
+        savedHours: kind === 'kick' ? savedHours(slug) : 0,
       });
     }
   }
@@ -1071,10 +1078,129 @@ const kickRedeemJs = (match) => `(async()=>{const sl=ms=>new Promise(r=>setTimeo
   const rw=await wait(x=>/^\\d/.test(x)&&x.includes(${JSON.stringify(match)}),4000); if(!rw) return 'recompensa indisponível (pausada pelo canal ou lista não abriu)';
   rw.click(); const go=await wait(x=>x==='Resgatar',4000); if(!go) return 'botão Resgatar não apareceu (pontos insuficientes?)';
   go.click(); await sl(2200); return 'ok'})()`;
+const FOLLOW_JS = "(()=>{const b=document.querySelector('button[data-testid=\"follow-button\"]'); if(!b||!b.offsetParent) return null; const l=(b.getAttribute('aria-label')||'').trim(); if(/^(seguir|follow)$/i.test(l)){b.click(); return 'seguiu';} return /deixar|unfollow/i.test(l)?'ja':null})()";
+// --- Kick: pontos guardados por canal e resgate com a live fechada ---
+// Os pontos de cada canal ficam anotados sempre que são lidos. A Kick aceita o resgate com o canal offline
+// (testado em 12/10/2026), então dá para gastar depois o que sobrou num canal que saiu do ar ou perdeu a vaga.
+function savePoints(slug, text) {
+  if (!text || !cfg.kick.includes(slug)) return;
+  const pts = parsePoints(text);
+  const cur = settings.kickPoints[slug];
+  if (cur && cur.pts === pts && Date.now() - cur.at < 10 * 60000) return;
+  // "1,2 mil" é valor arredondado pela Kick: fica marcado para a conta de horas ser conservadora.
+  settings.kickPoints[slug] = { pts, at: Date.now(), approx: / mil$/.test(text) };
+  saveSettings();
+}
+// Horas de +15% XP que os pontos guardados pagam com segurança.
+const savedHours = (slug) => {
+  const s = settings.kickPoints[slug];
+  return s ? Math.max(0, Math.floor((s.pts - (s.approx ? 60 : 0)) / KICK_HOUR)) : 0;
+};
+
+// O clique de verdade só funciona com a janela desenhando. Com o hub oculto, a janela é mostrada transparente
+// e sem ir para a barra de tarefas pelo tempo da rotina, e volta a ficar oculta no fim.
+async function withDrawnWindow(fn) {
+  const hidden = win && !win.isDestroyed() && !win.isVisible();
+  if (hidden) {
+    win.setOpacity(0);
+    win.setSkipTaskbar(true);
+    win.showInactive();
+    await sleep(500);
+  }
+  try {
+    return await fn();
+  } finally {
+    if (hidden && win && !win.isDestroyed()) {
+      win.hide();
+      win.setSkipTaskbar(false);
+      win.setOpacity(1);
+    }
+  }
+}
+
+// Abre a página de um canal da Kick numa aba temporária (fora da lista de abas, por baixo da aba ativa),
+// entrega a leitura do contador de pontos e fecha a aba no fim.
+async function withKickPage(slug, fn) {
+  const view = new WebContentsView({ webPreferences: { partition: PARTITION, backgroundThrottling: false, contextIsolation: true, sandbox: true } });
+  const wc = view.webContents;
+  wc.setAudioMuted(true);
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const tab = { id: 'tmp-' + slug, kind: 'kick', slug, title: slug, view, state: null, temp: true };
+  const [w, h] = win.getContentSize();
+  win.contentView.addChildView(view);
+  view.setBounds({ x: 0, y: BAR, width: Math.max(640, w - (settings.panel ? SIDE : 0)), height: Math.max(360, h - BAR) });
+  view.setVisible(true);
+  // A aba ativa volta para a frente: a temporária trabalha por baixo dela.
+  const front = tabs.get(activeId);
+  if (front) win.contentView.addChildView(front.view);
+  const read = () => js(tab, KICK_SHEET, 15000).catch(() => null);
+  try {
+    await wc.loadURL(`https://kick.com/${slug}`).catch(() => {});
+    await sleep(6000);
+    let s = await read();
+    if (!s) {
+      // Canal offline: o contador de pontos fica na página de chat do canal.
+      await wc.loadURL(`https://kick.com/${slug}/chat`).catch(() => {});
+      await sleep(6000);
+      s = await read();
+    }
+    if (!s) {
+      // Página lenta: mais uma espera antes de desistir.
+      await sleep(7000);
+      s = await read();
+    }
+    if (s) savePoints(slug, s.pts);
+    // Canais oficiais são sempre seguidos.
+    if (s) await js(tab, FOLLOW_JS, 10000).catch(() => null);
+    return await fn(tab, s);
+  } finally {
+    try {
+      win.contentView.removeChildView(view);
+    } catch (e) {}
+    try {
+      wc.close();
+    } catch (e) {}
+  }
+}
+
+// Resgate num canal: na aba da live, se estiver aberta; senão numa aba temporária.
 async function kickRedeem(slug, count, reward) {
+  return withDrawnWindow(async () => {
+    const tab = findTab('kick', slug);
+    if (tab && onHost(tab)) return kickRedeemOn(tab, slug, count, reward);
+    return withKickPage(slug, async (tmp, s) => {
+      if (!s) throw new Error('contador de pontos não encontrado na página do canal (a Kick está logada no app?)');
+      const r = await kickRedeemOn(tmp, slug, count, reward);
+      r.detail.push('Feito com a live fechada, numa aba temporária.');
+      return r;
+    });
+  });
+}
+
+// Lê os pontos de todos os canais oficiais da Kick, abrindo por instantes a página dos que estão fechados.
+async function kickSweep() {
+  const detail = [];
+  await withDrawnWindow(async () => {
+    for (const slug of cfg.kick.slice()) {
+      const open = findTab('kick', slug);
+      if (open && open.state && open.state.points) {
+        savePoints(slug, open.state.points);
+        detail.push(`${slug}: ${open.state.points} pontos (live aberta)`);
+        continue;
+      }
+      running = `Conferindo os pontos da Kick: ${slug}`;
+      sendStatus();
+      const s = await withKickPage(slug, async (_t, x) => x).catch(() => null);
+      detail.push(s ? `${slug}: ${s.pts} pontos` : `${slug}: não consegui ler (sem pontos nesse canal, ou Kick deslogada)`);
+    }
+  });
+  const hours = cfg.kick.reduce((n, s) => n + savedHours(s), 0);
+  detail.unshift(`Pontos guardados pagam ${hours} h de +15% de XP.`);
+  return { ok: true, detail };
+}
+
+async function kickRedeemOn(tab, slug, count, reward) {
   const R = KICK_REWARDS[reward || 'xp'];
-  const tab = findTab('kick', slug);
-  if (!tab || !onHost(tab)) throw new Error('a live desse canal não está aberta no app');
   const wc = tab.view.webContents;
   const detail = [];
   let done = 0;
@@ -1122,6 +1248,7 @@ async function kickRedeem(slug, count, reward) {
     layout();
   }
   const after = await js(tab, KICK_SHEET, 15000).catch(() => null);
+  if (after) savePoints(slug, after.pts);
   // Vale o que a Kick descontou: clicar em "Resgatar" não prova que o resgate foi aceito.
   const b = before ? parsePoints(before) : null;
   const a = after ? parsePoints(after.pts) : null;
@@ -1139,14 +1266,20 @@ async function kickRedeem(slug, count, reward) {
 const kickFail = new Map(); // canal → até quando esperar depois de uma falha
 let kickFails = 0;
 async function autoKick() {
-  const ch = channels().find((c) => c.kind === 'kick' && c.open && c.hours >= 1 && c.pts < 100000 && !(kickFail.get(c.slug) > Date.now()));
+  const list = channels().filter((c) => c.kind === 'kick' && !(kickFail.get(c.slug) > Date.now()));
+  // Primeiro as lives abertas; depois, os pontos guardados de canais fechados (offline ou sem vaga), todos de uma vez.
+  const live = list.find((c) => c.open && c.hours >= 1 && c.pts < 100000);
+  const closed = !live && list.find((c) => !c.open && c.savedHours >= 1);
+  const ch = live || closed;
   if (!ch) return;
+  const n = live ? 1 : Math.min(10, closed.savedHours);
   running = 'Resgate automático na Kick';
   let ok = false;
   try {
-    const r = await kickRedeem(ch.slug, 1);
-    ok = r.ok;
-    record({ title: `Kick: resgate automático de 1 h de +15% XP em ${ch.slug}`, ok: r.ok, detail: r.detail });
+    const r = await kickRedeem(ch.slug, n);
+    // Com pontos arredondados pela Kick o último resgate pode não caber: o que foi feito já vale.
+    ok = r.ok || (!!closed && r.done > 0);
+    record({ title: `Kick: resgate automático de ${r.done || n} h de +15% XP em ${ch.slug}${closed ? ' (live fechada)' : ''}`, ok, detail: r.detail });
   } catch (e) {
     record({ title: `Kick: resgate automático em ${ch.slug} falhou`, ok: false, detail: [e.message] });
   } finally {
@@ -1167,6 +1300,9 @@ async function autoKick() {
 
 // --- Jogo: troca de área ---
 async function goHunt(a) {
+  return withDrawnWindow(() => goHuntNow(a));
+}
+async function goHuntNow(a) {
   const g = gameTab();
   const detail = [];
   await gameJs('window.__pkHold(true)');
@@ -1489,8 +1625,13 @@ const ACTIONS = {
   },
   kickRedeem: {
     title: (a) => `Resgatar ${a.n} h de ${KICK_REWARDS[a.reward || 'xp'].label} com pontos do canal ${a.slug}`,
-    detail: (a) => `Gasta ${(a.n * KICK_REWARDS[a.reward || 'xp'].cost).toLocaleString('pt-BR')} pontos do canal na Kick. O resgate não pode ser desfeito.`,
+    detail: (a) => `Gasta ${(a.n * KICK_REWARDS[a.reward || 'xp'].cost).toLocaleString('pt-BR')} pontos do canal na Kick. O resgate não pode ser desfeito. Se a live estiver fechada, o app abre a página do canal por alguns segundos, resgata e fecha.`,
     run: (a) => kickRedeem(a.slug, a.n, a.reward),
+  },
+  kickPoints: {
+    confirm: false,
+    title: () => 'Conferir os pontos de todos os canais da Kick',
+    run: kickSweep,
   },
   login: {
     title: () => 'Fazer o login das lives pelo Chrome',
@@ -1544,7 +1685,7 @@ const AUTO_INFO = {
   lives: ['Ligar o gerenciador de lives', 'O app passa a abrir sozinho os canais oficiais que entram ao vivo e a fechar os que saem. Na Kick ele mantém 2 lives abertas (só 2 contam pontos por vez), começando pelas suas preferidas.'],
   review: ['Ligar a revisão automática da conta', 'A cada 6 horas o app abre a bolsa, o PvP e a janela da Kick no jogo por alguns segundos e confere caça, bônus, estoque, lives, bolsa, PvP e o próprio app. Ele só lê e aponta no Resumo o que merece atenção: não compra, não vende e não troca nada.'],
   pvp: ['Manter a fila do PvP ligada', 'O PvP Ranqueado roda sozinho enquanto você caça e perder não custa XP, só PR. O app confere a cada poucos minutos se a busca continua; se ela cair, liga a fila automática do jogo (recurso VIP), esconde a tela de batalha e procura partida de novo. Ele não mexe na sua equipe de PvP.'],
-  kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar.`],
+  kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar. Pontos que sobraram em canais fechados (offline ou sem vaga) também são resgatados: o app abre a página do canal por alguns segundos, resgata e fecha.`],
 };
 
 // Roda uma ação sem perguntar (automações e encadeamentos) e registra do mesmo jeito que as manuais.
@@ -1701,7 +1842,11 @@ ipcMain.on('set-config', (_e, key, raw) => {
   if (g && onHost(g)) {
     js(g, `window.__pk && (Object.assign(window.__pk.CFG, ${JSON.stringify(cfg.restock)}), Object.assign(window.__pk.KEEP, ${JSON.stringify(cfg.keep)}), window.__pk.MK && Object.assign(window.__pk.MK, ${JSON.stringify(cfg.market)}))`).catch(() => {});
   }
-  record({ kind: 'ajuste', title: `Ajuste: ${key} de ${before} para ${value}`, ok: true });
+  const detail = [];
+  // Mudou o número de lives da Kick: as abas se rearrumam na hora.
+  if (key === 'maxKick' && settings.auto.lives && lastPoll) arrangeKick(lastPoll.kick, detail);
+  record({ kind: 'ajuste', title: `Ajuste: ${key} de ${before} para ${value}`, ok: true, detail });
+  writeStatus();
   sendStatus();
 });
 // Cada opção pede as duas confirmações só na primeira vez; depois de aceita, não pergunta mais.

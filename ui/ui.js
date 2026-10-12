@@ -435,14 +435,34 @@ function pageLives(s) {
     grid([
       actionBtn(s, 'Login das lives', 'login', true, 'Abre o Chrome normal; entre na Twitch e na Kick e feche a janela', null, 'primary'),
       actionBtn(s, 'Verificar agora', 'refresh', true, 'Confere quais canais oficiais estão ao vivo'),
+      actionBtn(s, 'Conferir pontos da Kick', 'kickPoints', true, 'Abre por instantes a página de cada canal oficial da Kick que está fechado e anota os pontos que você tem em cada um (leva uns 15 s por canal)', null, 'wide'),
     ]),
     el('div', 'note', 'Twitch: +15% de XP com 1 live e +2,5% por live extra. Kick: 10 pontos a cada 5 min por canal; 300 pontos = 1 h de +15% de XP.'),
   ];
   const slots = s.kickSlots || 2;
+  const maxK = s.config.maxKick;
+  // Quantas lives da Kick ficam abertas: − e + mudam na hora (o mesmo ajuste da aba Ajustes).
+  const kickStepper = (n) => {
+    const d = el('div', 'stepper');
+    const less = btn('−', 'mini', () => window.pk.setConfig('maxKick', Math.max(0, n - 1)), 'Uma live da Kick a menos');
+    const more = btn('+', 'mini', () => window.pk.setConfig('maxKick', Math.min(20, n + 1)), 'Uma live da Kick a mais (acima de 2 elas ficam abertas sem pontuar)');
+    less.disabled = n <= 0;
+    more.disabled = n >= 20;
+    d.append(el('span', null, `Lives da Kick abertas: ${n}`), less, more);
+    return d;
+  };
   const kick = ch.filter((c) => c.kind === 'kick');
   if (kick.length) {
     nodes.push(
-      el('div', 'tip', `A Kick só conta pontos em ${slots} canais ao mesmo tempo. Por isso o app mantém ${slots} lives da Kick abertas: primeiro as suas preferidas que estiverem ao vivo, na ordem em que você marcou; se faltar, completa com outro canal oficial que esteja ao vivo.`),
+      el(
+        'div',
+        'tip',
+        maxK > slots
+          ? `Você escolheu manter ${maxK} lives da Kick abertas. Pelo que foi medido, a Kick só conta pontos em ${slots} canais ao mesmo tempo: as demais ficam abertas sem pontuar, gastando perto de 2% de CPU cada. As preferidas entram primeiro, na ordem em que você marcou.`
+          : `A Kick só conta pontos em ${slots} canais ao mesmo tempo. Por isso o app mantém ${maxK} live(s) da Kick aberta(s): primeiro as suas preferidas que estiverem ao vivo, na ordem em que você marcou; se faltar, completa com outro canal oficial que esteja ao vivo.`
+      ),
+      kickStepper(maxK),
+      el('div', 'note', 'Os canais oficiais da Kick são seguidos automaticamente pela sua conta quando abertos. Pontos guardados podem ser resgatados com a live fechada.'),
       h2('Preferidos da Kick', kick.some((c) => c.pref) ? 'na ordem de prioridade' : 'nenhum marcado')
     );
     const rank = (c) => (c.pref ? c.pref : 100 + (c.open ? 0 : c.live === true ? 1 : 2));
@@ -456,8 +476,10 @@ function pageLives(s) {
             name.append(el('span', 'dot kick'), el('span', null, (c.pref ? c.pref + 'º · ' : '') + c.slug));
             const state = c.open ? 'aberta, ocupando uma vaga' : c.closedByUser ? 'ao vivo, fechada por você' : c.live === true ? 'ao vivo, sem vaga' : c.live === false ? 'offline' : 'sem resposta';
             const btns = el('div', 'btns');
+            if (!c.open && c.savedHours >= 1) btns.append(actionBtn(s, `XP ${c.savedHours} h`, 'kickRedeem', true, 'Resgatar os pontos guardados deste canal com a live fechada: o app abre a página do canal por alguns segundos, resgata e fecha', { slug: c.slug, n: c.savedHours, reward: 'xp' }, 'mini primary'));
             btns.append(btn(c.pref ? 'Remover' : 'Preferir', 'mini' + (c.pref ? '' : ' primary'), () => window.pk.setKickPref(c.slug, !c.pref), c.pref ? 'Tira este canal dos preferidos' : 'Este canal passa a ter prioridade nas vagas da Kick'));
-            it.append(name, btns, el('div', 'meta', state + (c.points ? ` · ${c.points} pontos` : '')));
+            const seen = c.saved ? ` · ${fmt(c.saved.pts)} pontos${c.saved.approx ? ' (aprox.)' : ''}, vistos ${ago(c.saved.at)}` : ' · pontos ainda não conferidos';
+            it.append(name, btns, el('div', 'meta', state + (c.open && c.points ? ` · ${c.points} pontos` : seen)));
             return it;
           })
       ),
@@ -583,6 +605,11 @@ function pageHist(s) {
   return nodes;
 }
 
+// "há 3 h", "há 4 dias"
+const ago = (t) => {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 2 ? 'agora' : m < 60 ? `há ${m} min` : m < 36 * 60 ? `há ${Math.round(m / 60)} h` : `há ${Math.round(m / 1440)} dias`;
+};
 // Ajustes: [chave, rótulo, explicação, fator de exibição (0,1 → 10%)]
 const FIELDS = [
   ['Estoque', [
@@ -601,7 +628,7 @@ const FIELDS = [
   ]],
   ['Lives', [
     ['maxTwitch', 'Máximo de lives da Twitch', 'Cada live custa perto de 2,5% de CPU.'],
-    ['maxKick', 'Lives da Kick abertas (0 a 2)', 'A Kick só conta pontos em 2 canais por vez; 0 fecha todas.'],
+    ['maxKick', 'Lives da Kick abertas', 'A Kick só conta pontos em 2 canais por vez; acima de 2 as outras ficam abertas sem pontuar. 0 fecha todas.'],
     ['kickQuality', 'Qualidade do vídeo da Kick', '160, 360, 480, 720 ou 1080; 0 deixa a Kick escolher. Menor gasta menos CPU. Vale nas lives abertas a partir de agora.'],
   ]],
   ['Mercado', [

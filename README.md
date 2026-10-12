@@ -75,6 +75,12 @@ Cada ação ou automação que muda alguma coisa pede **duas confirmações na p
 
 Pelo que foi medido em outubro de 2026, a Kick só soma pontos de canal em **2 lives ao mesmo tempo** por conta: com seis abertas, só duas subiam. Por isso o app mantém 2 lives da Kick abertas e fecha as demais.
 
+Quem quiser pode manter mais de 2 abertas (botões − e + na aba *Lives*): as demais ficam abertas sem pontuar.
+
+Os pontos de cada canal ficam guardados sempre que são lidos, e a Kick aceita o resgate com o canal offline. Por isso dá para gastar depois o que sobrou num canal que saiu do ar ou perdeu a vaga: o app abre a página do canal por alguns segundos, resgata e fecha. *Conferir pontos da Kick* passa por todos os canais oficiais e anota quanto há em cada um. Com o resgate automático ligado, o que sobra em canais fechados também é resgatado.
+
+Os canais oficiais da Kick são **seguidos automaticamente** pela sua conta quando o app os abre (ele só clica em "Seguir"; nunca deixa de seguir ninguém).
+
 Na aba *Lives* você marca os seus canais **preferidos**. Ficam abertas as preferidas que estiverem ao vivo, na ordem em que você marcou. Se uma preferida estiver offline, a vaga vai para a próxima; se não houver preferida ao vivo, entra outro canal oficial que esteja ao vivo, de modo que as 2 vagas fiquem sempre ocupadas enquanto houver live. A Twitch não tem esse limite.
 
 ### Quando o app não reconhece o jogo

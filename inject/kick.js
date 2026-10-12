@@ -37,11 +37,22 @@
   const visible = (re) => [...document.querySelectorAll('button')].some((b) => b.offsetParent && re.test(b.innerText));
 
   const welcome = () => visible(/Comece agora|Get started/i);
+  let following = null;
+  let followTry = 0;
   const tick = () => {
     try {
       // Enquanto esse aviso fica na tela a Kick não conta o tempo assistido; Esc fecha sem responder.
       if (welcome()) {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      }
+      // Os canais oficiais são sempre seguidos: o app clica em "Seguir" quando o canal ainda não é seguido
+      // (só com a Kick logada, e nunca no botão de deixar de seguir).
+      const fb = document.querySelector('button[data-testid="follow-button"]');
+      const fl = fb && fb.offsetParent ? (fb.getAttribute('aria-label') || '').trim() : '';
+      following = /deixar|unfollow/i.test(fl) ? true : /^(seguir|follow)$/i.test(fl) ? false : null;
+      if (following === false && window.__pkState().logged && Date.now() - followTry > 60000) {
+        followTry = Date.now();
+        fb.click();
       }
       const v = liveVideo();
       if (v) {
@@ -60,7 +71,7 @@
     const raw = pb ? pb.innerText.trim() : '';
     const pts = /^\d+([.,]\d+)?( mil)?$/.test(raw) ? raw : null;
     // O contador de pontos do canal só aparece para quem está logado.
-    return { points: pts || null, logged: !!pts, playing: !!(v && !v.paused), height: v ? v.videoHeight : 0, dialog: welcome() };
+    return { points: pts || null, logged: !!pts, playing: !!(v && !v.paused), height: v ? v.videoHeight : 0, dialog: welcome(), following };
   };
   timers.push(setInterval(tick, 10000));
   setTimeout(tick, 4000);
