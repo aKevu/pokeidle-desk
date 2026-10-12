@@ -1267,10 +1267,10 @@ const kickFail = new Map(); // canal → até quando esperar depois de uma falha
 let kickFails = 0;
 async function autoKick() {
   const list = channels().filter((c) => c.kind === 'kick' && !(kickFail.get(c.slug) > Date.now()));
-  // Primeiro as lives abertas; depois, os pontos guardados de canais fechados (offline ou sem vaga), todos de uma vez.
+  // Só as lives abertas. Os pontos guardados de canais fechados ficam para quem usa decidir, pelo botão de cada canal.
   const live = list.find((c) => c.open && c.hours >= 1 && c.pts < 100000);
-  const closed = !live && list.find((c) => !c.open && c.savedHours >= 1);
-  const ch = live || closed;
+  const closed = null;
+  const ch = live;
   if (!ch) return;
   const n = live ? 1 : Math.min(10, closed.savedHours);
   running = 'Resgate automático na Kick';
@@ -1685,7 +1685,7 @@ const AUTO_INFO = {
   lives: ['Ligar o gerenciador de lives', 'O app passa a abrir sozinho os canais oficiais que entram ao vivo e a fechar os que saem. Na Kick ele mantém 2 lives abertas (só 2 contam pontos por vez), começando pelas suas preferidas.'],
   review: ['Ligar a revisão automática da conta', 'A cada 6 horas o app abre a bolsa, o PvP e a janela da Kick no jogo por alguns segundos e confere caça, bônus, estoque, lives, bolsa, PvP e o próprio app. Ele só lê e aponta no Resumo o que merece atenção: não compra, não vende e não troca nada.'],
   pvp: ['Manter a fila do PvP ligada', 'O PvP Ranqueado roda sozinho enquanto você caça e perder não custa XP, só PR. O app confere a cada poucos minutos se a busca continua; se ela cair, liga a fila automática do jogo (recurso VIP), esconde a tela de batalha e procura partida de novo. Ele não mexe na sua equipe de PvP.'],
-  kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar. Pontos que sobraram em canais fechados (offline ou sem vaga) também são resgatados: o app abre a página do canal por alguns segundos, resgata e fecha.`],
+  kick: ['Ligar o resgate automático da Kick', `Sempre que um canal aberto juntar ${KICK_HOUR} pontos, o app resgata 1 h de +15% XP sem perguntar. Vale só para as lives abertas: os pontos guardados de canais fechados só são gastos pelo botão de cada canal, na aba Lives.`],
 };
 
 // Roda uma ação sem perguntar (automações e encadeamentos) e registra do mesmo jeito que as manuais.
