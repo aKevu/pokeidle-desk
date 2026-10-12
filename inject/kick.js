@@ -69,7 +69,7 @@
     // e um apelido só de números já foi lido como se fossem os pontos.
     const pb = [...document.querySelectorAll('button')].find((b) => b.offsetParent && b.querySelector('svg[data-ds-icon="Bubbles"]'));
     const raw = pb ? pb.innerText.trim() : '';
-    const pts = /^\d+([.,]\d+)?( mil)?$/.test(raw) ? raw : null;
+    const pts = /^\d+([.,]\d+)?(\smil)?$/.test(raw) ? raw : null;
     // O contador de pontos do canal só aparece para quem está logado.
     return { points: pts || null, logged: !!pts, playing: !!(v && !v.paused), height: v ? v.videoHeight : 0, dialog: welcome(), following };
   };

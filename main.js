@@ -341,8 +341,9 @@ async function inject(tab) {
 // "4,6 mil" → 4600 (a Kick arredonda acima de mil, então é um piso aproximado).
 function parsePoints(text) {
   if (!text) return 0;
-  const mil = / mil$/.test(text);
-  const n = parseFloat(text.replace(' mil', '').replace(/\./g, '').replace(',', '.'));
+  // A Kick separa o número do "mil" com um espaço inquebrável, que não casa com um espaço comum.
+  const mil = /\smil$/.test(text);
+  const n = parseFloat(text.replace(/\s*mil$/, '').replace(/\./g, '').replace(',', '.'));
   return isNaN(n) ? 0 : Math.round(mil ? n * 1000 : n);
 }
 
@@ -1029,6 +1030,7 @@ async function poll() {
       changes.push(`fechou twitch:${t.slug} (limite de ${cfg.maxTwitch})`);
     }
     arrangeKick(result.kick, changes);
+    refreshKickPoints().catch(() => null);
   }
   if (changes.length) record({ title: 'Lives: ' + changes.join(', '), ok: true, detail: liveSummary(result) });
 
@@ -1070,12 +1072,12 @@ function liveSummary(r) {
 }
 
 // --- Kick: resgate de +15% XP com pontos do canal ---
-const KICK_SHEET = `(()=>{const b=[...document.querySelectorAll('button')].filter(b=>b.offsetParent&&b.querySelector('svg[data-ds-icon="Bubbles"]')&&/^\\d+([.,]\\d+)?( mil)?$/.test(b.innerText.trim()))[0];
+const KICK_SHEET = `(()=>{const b=[...document.querySelectorAll('button')].filter(b=>b.offsetParent&&b.querySelector('svg[data-ds-icon="Bubbles"]')&&/^\\d+([.,]\\d+)?(\\smil)?$/.test(b.innerText.trim()))[0];
   if(!b) return null; const open=/Pontos do canal/.test(document.body.innerText)&&[...document.querySelectorAll('button')].some(x=>x.offsetParent&&/XP PokeIdle/i.test(x.innerText));
   b.scrollIntoView({block:'center'}); const r=b.getBoundingClientRect(); return {open, pts:b.innerText.trim(), x:Math.round(r.left+r.width/2), y:Math.round(r.top+r.height/2)}})()`;
 const kickRedeemJs = (match) => `(async()=>{const sl=ms=>new Promise(r=>setTimeout(r,ms)); const vis=f=>[...document.querySelectorAll('button')].find(b=>b.offsetParent&&!b.disabled&&!b.classList.contains('inline')&&f(b.innerText.trim()));
   const wait=async(f,ms)=>{const t=Date.now(); while(Date.now()-t<ms){const b=vis(f); if(b) return b; await sl(200);} return null};
-  const rw=await wait(x=>/^\\d/.test(x)&&x.includes(${JSON.stringify(match)}),4000); if(!rw) return 'recompensa indisponível (pausada pelo canal ou lista não abriu)';
+  const rw=await wait(x=>/^\\d/.test(x)&&x.includes(${JSON.stringify(match)}),4000); if(!rw) return /temporariamente pausadas|temporarily paused/i.test(document.body.innerText)?'as recompensas deste canal estão pausadas agora (aviso da própria Kick); os pontos continuam guardados':'recompensa indisponível (lista não abriu)';
   rw.click(); const go=await wait(x=>x==='Resgatar',4000); if(!go) return 'botão Resgatar não apareceu (pontos insuficientes?)';
   go.click(); await sl(2200); return 'ok'})()`;
 const FOLLOW_JS = "(()=>{const b=document.querySelector('button[data-testid=\"follow-button\"]'); if(!b||!b.offsetParent) return null; const l=(b.getAttribute('aria-label')||'').trim(); if(/^(seguir|follow)$/i.test(l)){b.click(); return 'seguiu';} return /deixar|unfollow/i.test(l)?'ja':null})()";
@@ -1088,8 +1090,31 @@ function savePoints(slug, text) {
   const cur = settings.kickPoints[slug];
   if (cur && cur.pts === pts && Date.now() - cur.at < 10 * 60000) return;
   // "1,2 mil" é valor arredondado pela Kick: fica marcado para a conta de horas ser conservadora.
-  settings.kickPoints[slug] = { pts, at: Date.now(), approx: / mil$/.test(text) };
+  settings.kickPoints[slug] = { pts, at: Date.now(), approx: /\smil$/.test(text) };
   saveSettings();
+}
+// Pontos exatos de vários canais de uma vez, pelo mesmo endereço que a página da Kick consulta.
+// Roda dentro de uma aba da Kick já logada; a credencial da sessão é usada só ali e não sai da página.
+const kickPointsJs = (slugs) =>
+  `(async()=>{const m=document.cookie.match(/(?:^|; )session_token=([^;]+)/); if(!m) return null;` +
+  `const H={accept:'application/json',authorization:'Bearer '+decodeURIComponent(m[1])}; const out={};` +
+  `for(const s of ${JSON.stringify(slugs)}){try{const r=await fetch('/api/v2/channels/'+s+'/points',{headers:H});` +
+  `if(r.ok){const j=await r.json(); if(j&&j.data&&typeof j.data.points==='number') out[s]=j.data.points;}}catch(e){}} return out})()`;
+// Atualiza os pontos guardados de todos os canais oficiais. Precisa de uma aba da Kick aberta (ou dada).
+async function refreshKickPoints(tab) {
+  const t = tab || [...tabs.values()].find((x) => x.kind === 'kick' && onHost(x));
+  if (!t) return null;
+  const r = await js(t, kickPointsJs(cfg.kick), 30000).catch(() => null);
+  if (!r || !Object.keys(r).length) return null;
+  let changed = false;
+  for (const [slug, pts] of Object.entries(r)) {
+    const cur = settings.kickPoints[slug];
+    if (cur && cur.pts === pts && !cur.approx && Date.now() - cur.at < 10 * 60000) continue;
+    settings.kickPoints[slug] = { pts, at: Date.now(), approx: false };
+    changed = true;
+  }
+  if (changed) saveSettings();
+  return r;
 }
 // Horas de +15% XP que os pontos guardados pagam com segurança.
 const savedHours = (slug) => {
@@ -1180,6 +1205,15 @@ async function kickRedeem(slug, count, reward) {
 // Lê os pontos de todos os canais oficiais da Kick, abrindo por instantes a página dos que estão fechados.
 async function kickSweep() {
   const detail = [];
+  // Com uma live da Kick aberta a leitura é direta; sem nenhuma, uma página temporária serve de ponto de partida.
+  let direct = await refreshKickPoints();
+  if (!direct && cfg.kick.length) direct = await withDrawnWindow(() => withKickPage(cfg.kick[0], (tmp) => refreshKickPoints(tmp))).catch(() => null);
+  if (direct) {
+    for (const slug of cfg.kick) detail.push(slug in direct ? `${slug}: ${direct[slug].toLocaleString('pt-BR')} pontos` : `${slug}: a Kick não informou`);
+    const hours = cfg.kick.reduce((n, s) => n + savedHours(s), 0);
+    detail.unshift(`Pontos guardados pagam ${hours} h de +15% de XP.`);
+    return { ok: true, detail };
+  }
   await withDrawnWindow(async () => {
     for (const slug of cfg.kick.slice()) {
       const open = findTab('kick', slug);

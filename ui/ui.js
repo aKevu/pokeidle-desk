@@ -435,7 +435,7 @@ function pageLives(s) {
     grid([
       actionBtn(s, 'Login das lives', 'login', true, 'Abre o Chrome normal; entre na Twitch e na Kick e feche a janela', null, 'primary'),
       actionBtn(s, 'Verificar agora', 'refresh', true, 'Confere quais canais oficiais estão ao vivo'),
-      actionBtn(s, 'Conferir pontos da Kick', 'kickPoints', true, 'Abre por instantes a página de cada canal oficial da Kick que está fechado e anota os pontos que você tem em cada um (leva uns 15 s por canal)', null, 'wide'),
+      actionBtn(s, 'Conferir pontos da Kick', 'kickPoints', true, 'Lê na Kick quantos pontos você tem em cada canal oficial, aberto ou não, e guarda. Não gasta nada.', null, 'wide'),
     ]),
     el('div', 'note', 'Twitch: +15% de XP com 1 live e +2,5% por live extra. Kick: 10 pontos a cada 5 min por canal; 300 pontos = 1 h de +15% de XP.'),
   ];
